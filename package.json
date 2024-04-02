@@ -1,0 +1,27 @@
+{
+  "name": "koishi-plugin-yqbot",
+  "description": "yqbot, bot by yq",
+  "version": "0.0.1",
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "dist"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "chatbot",
+    "koishi",
+    "plugin"
+  ],
+  "devDependencies": {
+    "@koishijs/client": "^5.28.2"
+  },
+  "peerDependencies": {
+    "@koishijs/plugin-console": "^5.28.2",
+    "koishi": "^4.17.3"
+  },
+  "dependencies": {
+    "sharp": "^0.33.3"
+  }
+}
