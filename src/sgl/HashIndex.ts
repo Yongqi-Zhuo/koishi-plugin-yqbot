@@ -11,6 +11,9 @@ export type Key = number;
 export type Hash = bigint;
 export type Pair = { key: Key; hash: Hash };
 
+export type HashIndexHashes = Map<Key, Hash>;
+export type HashIndexExempts = Set<Key>;
+
 export type QueryResultNone = { kind: 'none'; hash: Hash };
 export type QueryResultFound = { kind: 'found' } & Pair;
 export type QueryResultExempt = { kind: 'exempt' } & Pair;
@@ -21,8 +24,8 @@ export type QueryResult =
 
 export default class HashIndex {
   private readonly tolerance: number;
-  private readonly hashes: Map<Key, Hash>;
-  private readonly exempts: Set<Key>;
+  private readonly hashes: HashIndexHashes;
+  private readonly exempts: HashIndexExempts;
 
   // chunks[i][j] = all keys k where the i-th chunk of the hash of k is j.
   private readonly chunks: Map<Hash, Key[]>[];
@@ -38,7 +41,11 @@ export default class HashIndex {
     }
   }
 
-  constructor(tolerance: number, hashes: Map<Key, Hash>, exempts: Set<Key>) {
+  constructor(
+    tolerance: number,
+    hashes: HashIndexHashes,
+    exempts: HashIndexExempts,
+  ) {
     assert(0 <= tolerance && tolerance < CHUNKS);
     this.tolerance = tolerance;
     this.hashes = hashes;
