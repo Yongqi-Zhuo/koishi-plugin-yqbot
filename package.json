@@ -22,6 +22,7 @@
     "koishi": "^4.17.3"
   },
   "dependencies": {
+    "javascript-time-ago": "^2.5.9",
     "sharp": "^0.33.3"
   }
 }
