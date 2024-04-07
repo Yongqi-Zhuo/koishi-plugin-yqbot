@@ -1,4 +1,4 @@
-import { Context, Session } from 'koishi';
+import { $, Context, Session } from 'koishi';
 
 import HashIndex, { Hash as HashIndexHash } from './HashIndex';
 
@@ -27,6 +27,11 @@ export interface SglRecord {
   userId: string;
   timestamp: number;
 }
+
+export type Ranking = {
+  userId: string;
+  count: number;
+};
 
 export const declareSchema = (ctx: Context) => {
   ctx.database.extend(
@@ -115,5 +120,21 @@ export class DatabaseHandle {
     await this.ctx.database.set('sglOrigin', originId, {
       exempt: true,
     });
+  }
+
+  async rankings(fromDate: number): Promise<Ranking[]> {
+    return await this.ctx.database
+      .select('sglRecord')
+      .where((row) =>
+        $.and(
+          $.eq(row.channelKey, this.channelKey),
+          $.gte(row.timestamp, fromDate),
+        ),
+      )
+      .groupBy('userId', {
+        count: (row) => $.count(row.id),
+      })
+      .orderBy('count', 'desc')
+      .execute();
   }
 }

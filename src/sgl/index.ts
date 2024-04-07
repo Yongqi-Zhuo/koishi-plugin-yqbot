@@ -286,4 +286,45 @@ export async function apply(ctx: Context, config: Config) {
       ...antiRecall.images.map(({ src, title }) => h.image(src, { title })),
     ]);
   });
+
+  // Rankings.
+  ctx
+    .command('sgl.rankings', '来看看谁被查重最多次吧！')
+    .option(
+      'duration',
+      '-d <duration:posint> 仅显示最近的 duration 天内的数据。',
+    )
+    .action(async ({ session, options }) => {
+      const channelKey = getChannelKey(session);
+      const state = getState(channelKey);
+      const handle = new DatabaseHandle(channelKey, ctx, session, state.index);
+
+      const duration = options.duration;
+      const fromDate = duration
+        ? Date.now() - duration * 24 * 60 * 60 * 1000
+        : 0;
+      const durationText = duration ? `最近 ${duration} 天` : '过去所有时间';
+      const rankings = await handle.rankings(fromDate);
+
+      if (rankings.length === 0) {
+        return '暂无数据。';
+      }
+
+      const rankingsTexts = await Promise.all(
+        rankings.map(async ({ userId, count }) => {
+          const nickname = await getNickname(session, userId);
+          return { nickname, count };
+        }),
+      );
+      return (
+        `查重次数排行榜\n在${durationText}内：\n` +
+        rankingsTexts
+          .map(
+            ({ nickname, count }, index) =>
+              `  第 ${index + 1} 名：${nickname} 被查重了 ${count} 次。`,
+          )
+          .join('\n') +
+        '\n请继续努力哦！'
+      );
+    });
 }
