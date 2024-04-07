@@ -1,10 +1,6 @@
 import { Context, Session } from 'koishi';
 
-import HashIndex, {
-  HashIndexExempts,
-  Hash as HashIndexHash,
-  HashIndexHashes,
-} from './HashIndex';
+import HashIndex, { Hash as HashIndexHash } from './HashIndex';
 
 declare module 'koishi' {
   interface Tables {
@@ -65,40 +61,6 @@ export const declareSchema = (ctx: Context) => {
       },
     },
   );
-};
-
-const groupOrigins = (origins: SglOrigin[]) => {
-  type Origins = {
-    hashes: HashIndexHashes;
-    exempts: HashIndexExempts;
-  };
-  const groups = new Map<string, Origins>();
-  for (const origin of origins) {
-    const key = origin.channelKey;
-    if (!groups.has(key)) {
-      groups.set(key, { hashes: new Map(), exempts: new Set() });
-    }
-    const { hashes, exempts } = groups.get(key)!;
-    hashes.set(origin.id, BigInt(origin.hash));
-    if (origin.exempt) {
-      exempts.add(origin.id);
-    }
-  }
-  return groups;
-};
-
-// Read from database.
-export const initializeStates = async (
-  ctx: Context,
-  tolerance: number,
-): Promise<Map<string, HashIndex>> => {
-  const states: Map<string, HashIndex> = new Map();
-  const origins = await ctx.database.select('sglOrigin').execute();
-  const groups = groupOrigins(origins);
-  for (const [channelKey, { hashes, exempts }] of groups) {
-    states.set(channelKey, new HashIndex(tolerance, hashes, exempts));
-  }
-  return states;
 };
 
 // Handle database operations.

@@ -5,16 +5,17 @@ import { Context, Schema, Session, h } from 'koishi';
 import {} from 'koishi-plugin-adapter-onebot';
 
 import { hashToBinaryString } from './common';
-import {
-  DatabaseHandle,
-  SglOrigin,
-  declareSchema,
-  initializeStates,
-} from './database';
+import { DatabaseHandle, SglOrigin, declareSchema } from './database';
 import download from './download';
-import HashIndex, { QueryResult } from './HashIndex';
+import { QueryResult } from './HashIndex';
+import {
+  AntiRecallMeta,
+  ChannelState,
+  IgnoreError,
+  initializeStates,
+} from './model';
 import phash from './phash';
-import { getChannelKey } from '../common';
+import { getChannelKey, getNickname } from '../common';
 import { zip } from '../utils';
 
 export const name = 'sgl';
@@ -51,28 +52,11 @@ interface RawElement {
   replyElement: any;
 }
 
-const getNickname = async (session: Session, userId: string) => {
-  try {
-    const member = await session.bot.getGuildMember(session.guildId, userId);
-    const nick = member.nick;
-    if (nick) return nick;
-    return member.user!.name!;
-  } catch (e) {
-    // If this is not a guild member, we have to get the user.
-  }
-  try {
-    const user = await session.bot.getUser(userId);
-    return user.nick || user.name || userId;
-  } catch (e) {
-    return userId;
-  }
-};
-
-type Candidate = { index: number } & QueryResult;
+type Candidate = { index: number; src: string; title: string } & QueryResult;
 
 type Torture = { index: number } & SglOrigin;
 
-TimeAgo.addDefaultLocale(zh);
+TimeAgo.addLocale(zh);
 const timeAgo = new TimeAgo('zh-CN');
 
 export async function apply(ctx: Context, config: Config) {
@@ -81,22 +65,16 @@ export async function apply(ctx: Context, config: Config) {
   const sessionsStates = await initializeStates(ctx, config.tolerance);
   const getState = (key: string) => {
     if (!sessionsStates.has(key)) {
-      sessionsStates.set(
-        key,
-        new HashIndex(config.tolerance, new Map(), new Set()),
-      );
+      sessionsStates.set(key, ChannelState(config.tolerance));
     }
     return sessionsStates.get(key)!;
-  };
-  const getHandle = (session: Session) => {
-    const key = getChannelKey(session);
-    const state = getState(key);
-    return new DatabaseHandle(key, ctx, session, state);
   };
 
   ctx.on('message', async (session) => {
     // We need to find the HashIndex.
-    const handle = getHandle(session);
+    const channelKey = getChannelKey(session);
+    const state = getState(channelKey);
+    const handle = new DatabaseHandle(channelKey, ctx, session, state.index);
 
     const fullRawElements = (session.onebot as any)?.raw?.elements as
       | RawElement[]
@@ -147,6 +125,7 @@ export async function apply(ctx: Context, config: Config) {
       // Download
       const index = counter;
       const url = e.attrs.src;
+      const title = e.attrs.title;
       candidatesPromises.push(
         (async (): Promise<Candidate | null> => {
           let image: Buffer;
@@ -159,7 +138,7 @@ export async function apply(ctx: Context, config: Config) {
           // Hash
           const hash = phash(image);
           const queryResult = handle.index.query(hash);
-          return { index, ...queryResult };
+          return { index, src: url, title, ...queryResult };
         })(),
       );
     }
@@ -170,6 +149,7 @@ export async function apply(ctx: Context, config: Config) {
       (candidate): candidate is Candidate => candidate !== null,
     );
     const resultsPromises: Promise<Torture | undefined>[] = [];
+    const antiRecall: AntiRecallMeta = { userId: session.userId, images: [] };
     for (const candidate of candidates) {
       switch (candidate.kind) {
         case 'none':
@@ -196,8 +176,11 @@ export async function apply(ctx: Context, config: Config) {
               .addRecordAndQueryOrigin(candidate.key)
               .then((origin) => ({ index: candidate.index, ...origin })),
           );
-          // TODO: if there are tortures, we should give user a chance to exempt.
-          // TODO: anti recall.
+          // Anti-recall.
+          antiRecall.images.push({
+            src: candidate.src,
+            title: candidate.title,
+          });
           break;
       }
     }
@@ -212,7 +195,7 @@ export async function apply(ctx: Context, config: Config) {
       tortures.map(async (torture) => {
         const nickname = await getNickname(session, torture.senderId);
         const date = new Date(torture.timestamp);
-        return { index: torture.index, date, nickname };
+        return { index: torture.index, date, nickname, originId: torture.id };
       }),
     );
     const single = ({ date, nickname }: { date: Date; nickname: string }) =>
@@ -242,9 +225,65 @@ export async function apply(ctx: Context, config: Config) {
         .join('；\n')}\n水过了。`;
       tortureEpilogue = '请发送 /sgl ignore <要忽略的图片序号> 来忽略。';
     }
+    const messageId = session.messageId;
     await session.send([
-      h.quote(session.messageId),
+      h.quote(messageId),
       h.text(`水过啦！${tortureText}\n如果这是一张表情包，${tortureEpilogue}`),
+    ]);
+
+    // If there are tortures, we should give user a chance to ignore.
+    state.ignore.reset(
+      torturesData.map(({ index, originId }) => [index, originId]),
+    );
+
+    // Anti-recall.
+    state.antiRecall.set(messageId, antiRecall);
+    ctx.setTimeout(() => state.antiRecall.delete(messageId), 1000 * 60 * 5); // 5 minutes
+  });
+
+  // Exempt.
+  ctx
+    .command(
+      'sgl.ignore [index:posint]',
+      '标记一张图片为表情包，使之不再被查重。',
+    )
+    .action(async ({ session }, index) => {
+      const channelKey = getChannelKey(session);
+      const state = getState(channelKey);
+      try {
+        const originId = state.ignore.pop(index);
+        const handle = new DatabaseHandle(
+          channelKey,
+          ctx,
+          session,
+          state.index,
+        );
+        await handle.setExempt(originId);
+        return '已忽略指定的图片。';
+      } catch (e) {
+        if (e instanceof IgnoreError) {
+          return e.message;
+        } else {
+          throw e;
+        }
+      }
+    });
+
+  // Anti-recall.
+  ctx.on('message-deleted', async (session) => {
+    const channelKey = getChannelKey(session);
+    const state = getState(channelKey);
+    const messageId = session.messageId;
+    if (!state.antiRecall.has(messageId)) {
+      return;
+    }
+    const antiRecall = state.antiRecall.get(messageId)!;
+    state.antiRecall.delete(messageId);
+
+    const nickname = await getNickname(session, antiRecall.userId);
+    await session.send([
+      h.text(`${nickname} 被 yqbot 查重之后把消息撤回啦！以下是撤回的图片：`),
+      ...antiRecall.images.map(({ src, title }) => h.image(src, { title })),
     ]);
   });
 }
