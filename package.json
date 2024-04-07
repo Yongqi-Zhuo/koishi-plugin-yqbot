@@ -1,7 +1,10 @@
 {
   "name": "koishi-plugin-yqbot",
   "description": "yqbot, bot by yq",
-  "version": "0.0.1",
+  "version": "1.0.0",
+  "contributors": [
+    "Yongqi Zhuo <yongqizhuo@gmail.com>"
+  ],
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -9,6 +12,10 @@
     "dist"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yongqi-Zhuo/koishi-plugin-yqbot.git"
+  },
   "keywords": [
     "chatbot",
     "koishi",
@@ -24,5 +31,19 @@
   "dependencies": {
     "javascript-time-ago": "^2.5.9",
     "sharp": "^0.33.3"
+  },
+  "koishi": {
+    "description": {
+      "zh": "一个支持查重功能的 bot。"
+    },
+    "service": {
+      "required": [
+        "database"
+      ]
+    },
+    "locales": [
+      "zh"
+    ],
+    "preview": true
   }
 }
