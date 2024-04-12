@@ -1,13 +1,13 @@
 import assert from 'assert';
 import TimeAgo from 'javascript-time-ago';
 import zh from 'javascript-time-ago/locale/zh';
-import { Context, Schema, Session, h } from 'koishi';
-import {} from 'koishi-plugin-adapter-onebot';
+import { Context, Schema, h } from 'koishi';
 
+import { getChannelKey, getNickname } from '../common';
+import { QueryResult } from './HashIndex';
 import { hashToBinaryString } from './common';
 import { DatabaseHandle, SglOrigin, declareSchema } from './database';
 import download from './download';
-import { QueryResult } from './HashIndex';
 import {
   AntiRecallMeta,
   ChannelState,
@@ -15,8 +15,6 @@ import {
   initializeStates,
 } from './model';
 import phash from './phash';
-import { getChannelKey, getNickname } from '../common';
-import { zip } from '../utils';
 
 export const name = 'sgl';
 
@@ -36,21 +34,6 @@ export const Config: Schema<Config> = Schema.object({
       'Max difference of DCT hashes for two pictures to be seen as the same.',
     ),
 });
-
-enum PicSubType {
-  Normal = 0,
-  Face = 1,
-}
-
-interface PicElement {
-  picSubType: PicSubType;
-  summary: string;
-}
-
-interface RawElement {
-  picElement: PicElement | null;
-  replyElement: any;
-}
 
 type Candidate = { index: number; src: string; title: string } & QueryResult;
 
@@ -76,42 +59,27 @@ export async function apply(ctx: Context, config: Config) {
     const state = getState(channelKey);
     const handle = new DatabaseHandle(channelKey, ctx, session, state.index);
 
-    const fullRawElements = (session.onebot as any)?.raw?.elements as
-      | RawElement[]
-      | undefined;
-    if (!fullRawElements) {
-      ctx.logger.error('Enable debug mode to use this plugin.');
-      return;
-    }
     const elements = session.elements;
-    const rawElements = fullRawElements.filter((e) => !e.replyElement);
-    // OK. Now we are sure debug mode is on. We can distinguish between images and custom faces.
 
     let counter = 0;
     const candidatesPromises: Promise<Candidate | null>[] = [];
-    if (rawElements.length !== elements.length) {
-      ctx.logger.error('Length mismatch between rawElements and elements.');
-      ctx.logger.error('   elements:', elements.length, ':', elements);
-      ctx.logger.error('rawElements:', rawElements.length, ':', rawElements);
-      return;
-    }
-    for (const [rawElement, e] of zip(rawElements, elements)) {
-      ctx.logger.debug('received raw:', rawElement);
+    for (const e of elements) {
+      ctx.logger.debug('received raw attributes:', e.attrs);
       if (e.type !== 'img') {
         continue;
       }
       // TODO: handle this in another function.
-      const picElement = rawElement.picElement;
-      if (!picElement) {
-        ctx.logger.error('Raw message does not contain picElement!');
+      const picSummary = e.attrs.summary;
+      if (!picSummary) {
+        ctx.logger.error(
+          'Use patched Lagrange.Core to use this plugin. `summary` field missing.',
+        );
         continue;
       }
       ++counter;
 
       // Mobile QQ is observed to send custom faces as '[动画表情]' with picSubType = 0, which violates the semantics of picSubType.
-      const isCustomFace =
-        picElement.summary === '[动画表情]' ||
-        picElement.picSubType === PicSubType.Face;
+      const isCustomFace = picSummary === '[动画表情]';
       if (isCustomFace) {
         ctx.logger.debug('This IS a custom face:', e);
         // It is usual to send the same custom face multiple times.
