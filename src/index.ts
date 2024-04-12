@@ -1,20 +1,26 @@
-import { Context, Schema } from 'koishi';
 import { resolve } from 'path';
+
 import {} from '@koishijs/plugin-console';
+import { Context, Schema } from 'koishi';
+
 import * as Sgl from './sgl';
+import * as Yqrt from './yqrt';
 
 export const name = 'yqbot';
 
 export interface Config {
   sgl: Sgl.Config;
+  yqrt: Yqrt.Config;
 }
 
 export const Config: Schema<Config> = Schema.object({
   sgl: Sgl.Config,
+  yqrt: Yqrt.Config,
 });
 
 export function apply(ctx: Context) {
   ctx.plugin(Sgl);
+  ctx.plugin(Yqrt);
 
   ctx.inject(['console'], (ctx) => {
     ctx.console.addEntry({

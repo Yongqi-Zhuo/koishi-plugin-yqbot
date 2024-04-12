@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-yqbot",
   "description": "yqbot, bot by yq",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "contributors": [
     "Yongqi Zhuo <yongqizhuo@gmail.com>"
   ],
@@ -22,7 +22,10 @@
     "plugin"
   ],
   "devDependencies": {
-    "@koishijs/client": "^5.28.2"
+    "@koishijs/client": "^5.28.2",
+    "@types/shell-quote": "^1.7.5",
+    "@types/temp": "^0",
+    "@types/underscore": "^1.11.15"
   },
   "peerDependencies": {
     "@koishijs/plugin-console": "^5.28.2",
@@ -30,7 +33,11 @@
   },
   "dependencies": {
     "javascript-time-ago": "^2.5.9",
-    "sharp": "^0.33.3"
+    "sharp": "^0.33.3",
+    "shell-quote": "^1.8.1",
+    "temp": "^0.9.4",
+    "tree-kill": "^1.2.2",
+    "underscore": "^1.13.6"
   },
   "koishi": {
     "description": {
