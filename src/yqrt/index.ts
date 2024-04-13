@@ -51,6 +51,10 @@ export async function apply(ctx: Context, config: Config) {
     timeoutCompile: config.timeoutCompile,
     timeoutRun: config.timeoutRun,
   });
+  ctx.command(
+    'yqrt',
+    'A runtime for running and testing code. You can run shell commands and code in various languages.',
+  );
   if (config.shell) {
     ctx
       .command('yqrt.shell <cmds:text>', 'Run shell code.')

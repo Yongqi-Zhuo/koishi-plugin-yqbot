@@ -7,6 +7,10 @@ declare module 'koishi' {
     sglOrigin: SglOrigin;
     sglRecord: SglRecord;
   }
+  interface Channel {
+    sglEnabled: boolean;
+    sglTolerance: number;
+  }
 }
 
 export interface SglOrigin {
@@ -33,7 +37,7 @@ export type Ranking = {
   count: number;
 };
 
-export const declareSchema = (ctx: Context) => {
+export const declareSchema = (ctx: Context, defaultTolerance: number) => {
   ctx.database.extend(
     'sglOrigin',
     {
@@ -66,11 +70,19 @@ export const declareSchema = (ctx: Context) => {
       },
     },
   );
+  ctx.database.extend('channel', {
+    sglEnabled: { type: 'boolean', nullable: false, initial: false },
+    sglTolerance: {
+      type: 'unsigned',
+      nullable: false,
+      initial: defaultTolerance,
+    },
+  });
 };
 
 // Handle database operations.
 export class DatabaseHandle {
-  readonly channelKey: string;
+  private readonly channelKey: string;
   private readonly ctx: Context;
   private readonly session: Session;
   readonly index: HashIndex;

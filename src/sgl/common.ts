@@ -11,6 +11,8 @@ export const CHUNK_LEN = 8;
 export const CHUNK_MASK = 255n;
 export const HASH_BOUND = 1n << 64n;
 
+export const TOLERANCE_BOUND = CHUNKS - 1;
+
 export function distance(a: bigint, b: bigint): number {
   let diff = a ^ b;
   return diff.toString(2).replace(/0/g, '').length;

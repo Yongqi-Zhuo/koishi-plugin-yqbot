@@ -23,7 +23,6 @@ export type QueryResult =
   | QueryResultExempt;
 
 export default class HashIndex {
-  private readonly tolerance: number;
   private readonly hashes: HashIndexHashes;
   private readonly exempts: HashIndexExempts;
 
@@ -41,13 +40,7 @@ export default class HashIndex {
     }
   }
 
-  constructor(
-    tolerance: number,
-    hashes: HashIndexHashes,
-    exempts: HashIndexExempts,
-  ) {
-    assert(0 <= tolerance && tolerance < CHUNKS);
-    this.tolerance = tolerance;
+  constructor(hashes: HashIndexHashes, exempts: HashIndexExempts) {
     this.hashes = hashes;
     this.exempts = exempts;
 
@@ -69,10 +62,11 @@ export default class HashIndex {
     this.exempts.add(key);
   }
 
-  query(hash: Hash): QueryResult {
+  query(hash: Hash, tolerance: number): QueryResult {
+    assert(0 <= tolerance && tolerance < CHUNKS);
     // We only need to check the first `tolerance + 1` chunks.
     // If after checking `tolerance + 1` chunks, we still have not found the key, then there are at least `tolerance + 1` bits difference for all hashes in the store.
-    for (let i = 0; i <= this.tolerance; i++) {
+    for (let i = 0; i <= tolerance; i++) {
       const chunk = this.chunks[i];
       const segment = (hash >> BigInt(i * CHUNK_LEN)) & CHUNK_MASK;
       if (chunk.has(segment)) {
@@ -81,7 +75,7 @@ export default class HashIndex {
         for (const key of chunk.get(segment)!) {
           const target = this.hashes.get(key)!;
           const d = distance(hash, target);
-          if (d <= this.tolerance) {
+          if (d <= tolerance) {
             result = { key, hash: target };
             break;
           }

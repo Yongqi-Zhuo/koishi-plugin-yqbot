@@ -55,8 +55,8 @@ export type ChannelState = {
   // message id -> image urls
   antiRecall: Map<string, AntiRecallMeta>;
 };
-export const ChannelState = (tolerance: number) => ({
-  index: new HashIndex(tolerance, new Map(), new Set()),
+export const ChannelState = () => ({
+  index: new HashIndex(new Map(), new Set()),
   ignore: new Ignore(),
   antiRecall: new Map(),
 });
@@ -84,14 +84,13 @@ const groupOrigins = (origins: SglOrigin[]) => {
 // Read from database.
 export const initializeStates = async (
   ctx: Context,
-  tolerance: number,
 ): Promise<Map<string, ChannelState>> => {
   const states: Map<string, ChannelState> = new Map();
   const origins = await ctx.database.select('sglOrigin').execute();
   const groups = groupOrigins(origins);
   for (const [channelKey, { hashes, exempts }] of groups) {
     states.set(channelKey, {
-      index: new HashIndex(tolerance, hashes, exempts),
+      index: new HashIndex(hashes, exempts),
       ignore: new Ignore(),
       antiRecall: new Map(),
     });
