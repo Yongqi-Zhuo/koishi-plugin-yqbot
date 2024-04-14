@@ -1,13 +1,11 @@
 import { Context, Schema, h } from 'koishi';
-import os from 'os';
 import { parse } from 'shell-quote';
-import temp from 'temp';
 import _ from 'underscore';
 
-import { sandbox } from './execute';
+import { makeTempDir } from './common';
 import { Compiler, Languages } from './compile';
-
-temp.track();
+import * as Docker from './docker';
+import { sandbox } from './execute';
 
 export const name = 'yqrt';
 
@@ -29,7 +27,7 @@ export const Config: Schema<Config> = Schema.object({
     .min(256)
     .description('Max length of stdout/stderr to display.'),
   timeoutCompile: Schema.number()
-    .default(2000)
+    .default(30000)
     .min(100)
     .description('Timeout for compilation in milliseconds.'),
   timeoutRun: Schema.number()
@@ -37,13 +35,6 @@ export const Config: Schema<Config> = Schema.object({
     .min(100)
     .description('Timeout for running code in milliseconds.'),
 });
-
-const tempDirPrefix = 'yqbot-yqrt-';
-const makeTempDir = () =>
-  temp.mkdir({
-    prefix: tempDirPrefix,
-    dir: os.tmpdir(),
-  });
 
 export async function apply(ctx: Context, config: Config) {
   const compiler = new Compiler({
@@ -114,4 +105,9 @@ export async function apply(ctx: Context, config: Config) {
         );
       }
     });
+
+  ctx.plugin(Docker, {
+    timeoutCompile: config.timeoutCompile,
+    timeoutRun: config.timeoutRun,
+  });
 }

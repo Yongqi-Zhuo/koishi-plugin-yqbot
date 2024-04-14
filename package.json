@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-yqbot",
   "description": "yqbot, bot by yq",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "contributors": [
     "Yongqi Zhuo <yongqizhuo@gmail.com>"
   ],
@@ -23,6 +23,8 @@
   ],
   "devDependencies": {
     "@koishijs/client": "^5.28.2",
+    "@types/docker-modem": "^3.0.6",
+    "@types/dockerode": "^3.3.28",
     "@types/shell-quote": "^1.7.5",
     "@types/temp": "^0",
     "@types/underscore": "^1.11.15"
@@ -32,6 +34,8 @@
     "koishi": "^4.17.3"
   },
   "dependencies": {
+    "docker-modem": "^5.0.3",
+    "dockerode": "^4.0.2",
     "javascript-time-ago": "^2.5.9",
     "sharp": "^0.33.3",
     "shell-quote": "^1.8.1",
@@ -41,7 +45,7 @@
   },
   "koishi": {
     "description": {
-      "zh": "一个支持查重功能的 bot。"
+      "zh": "一个支持查重和自定义编程功能的 bot。"
     },
     "service": {
       "required": [

@@ -18,4 +18,12 @@ yqbot 可以运行一些简单的代码和 shell 命令。目前支持的语言�
 - C++
 - Python
 
-由于隔离机制需要 firejail 的支持，因此需要在服务器上安装 firejail。
+由于隔离运行机制需要 firejail 的支持，因此需要在服务器上安装 [firejail](https://github.com/netblue30/firejail)。例如在 Ubuntu 上，你需要
+
+```bash
+sudo add-apt-repository ppa:deki/firejail
+sudo apt-get update
+sudo apt-get install firejail firejail-profiles
+```
+
+如果你需要使用 yqrt 的自定义编程功能，那么 你还需要安装 Docker 和 CRIU，并且需要开启 docker 的实验性功能以支持 checkpoint。Docker 的安装方法请参考[官方文档](https://docs.docker.com/engine/install/ubuntu/)。开启实验性功能是在 `/etc/docker/daemon.json` 中添加 `"experimental": true`。CRIU 可以通过 `sudo apt-get install criu` 安装。
