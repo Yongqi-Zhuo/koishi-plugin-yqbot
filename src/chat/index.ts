@@ -54,12 +54,19 @@ export async function apply(ctx: Context, config: Config) {
   ctx.command('chat', '自动回复');
 
   ctx
-    .command('chat.remember <question:string> <answer:text>')
+    .command('chat.remember <question:string> [answer:text]')
     .option('inexact', '-i')
-    .action(async ({ session, options }, question: string, answer: string) => {
-      console.log('chat.remember', question, answer);
-      if (typeof question !== 'string' || typeof answer !== 'string') {
+    .action(async ({ session, options }, question: string, answer?: string) => {
+      if (typeof question !== 'string') {
         return h.text('参数错误。');
+      }
+      if (!answer) {
+        await session.send('请提供一个回复。直接输入就行了。');
+        // This is the next message.
+        answer = await session.prompt();
+      }
+      if (typeof answer !== 'string') {
+        return h.text('这次没有 remember 成功，下次再试吧。');
       }
       const handle = getHandle(session);
       const savedAnswer = await ctx.assets.transform(answer);
