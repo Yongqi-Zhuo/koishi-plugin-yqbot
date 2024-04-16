@@ -38,7 +38,7 @@ export type Ranking = {
 };
 
 export const declareSchema = (ctx: Context, defaultTolerance: number) => {
-  ctx.database.extend(
+  ctx.model.extend(
     'sglOrigin',
     {
       id: { type: 'unsigned', nullable: false },
@@ -53,7 +53,7 @@ export const declareSchema = (ctx: Context, defaultTolerance: number) => {
       autoInc: true,
     },
   );
-  ctx.database.extend(
+  ctx.model.extend(
     'sglRecord',
     {
       id: { type: 'unsigned', nullable: false },
@@ -70,7 +70,7 @@ export const declareSchema = (ctx: Context, defaultTolerance: number) => {
       },
     },
   );
-  ctx.database.extend('channel', {
+  ctx.model.extend('channel', {
     sglEnabled: { type: 'boolean', nullable: false, initial: false },
     sglTolerance: {
       type: 'unsigned',

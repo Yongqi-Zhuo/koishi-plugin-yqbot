@@ -9,7 +9,7 @@ import { DatabaseHandle, initializeStates } from './model';
 
 export const name = 'chat';
 
-export const inject = ['assets'];
+export const inject = ['assets', 'database'];
 
 export interface Config {
   enabled: boolean;

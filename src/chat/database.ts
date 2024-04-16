@@ -18,7 +18,7 @@ export interface ChatTemplate {
 }
 
 export const declareSchema = (ctx: Context) => {
-  ctx.database.extend(
+  ctx.model.extend(
     'chat',
     {
       id: { type: 'unsigned', nullable: false },
