@@ -47,19 +47,17 @@ export type AntiRecallMeta = {
   images: { src: string; title: string }[];
 };
 
-export type ChannelState = {
+export class ChannelState {
   index: HashIndex;
-  // origin ids
-  // none, single, multiple (index and originId)
-  ignore: Ignore;
+  // index -> originId
+  ignore: Ignore = new Ignore();
   // message id -> image urls
-  antiRecall: Map<string, AntiRecallMeta>;
-};
-export const ChannelState = () => ({
-  index: new HashIndex(new Map(), new Set()),
-  ignore: new Ignore(),
-  antiRecall: new Map(),
-});
+  antiRecall: Map<string, AntiRecallMeta> = new Map();
+
+  constructor(index?: HashIndex) {
+    this.index = index || new HashIndex(new Map(), new Set());
+  }
+}
 
 const groupOrigins = (origins: SglOrigin[]) => {
   type Origins = {
@@ -89,11 +87,7 @@ export const initializeStates = async (
   const origins = await ctx.database.select('sglOrigin').execute();
   const groups = groupOrigins(origins);
   for (const [channelKey, { hashes, exempts }] of groups) {
-    states.set(channelKey, {
-      index: new HashIndex(hashes, exempts),
-      ignore: new Ignore(),
-      antiRecall: new Map(),
-    });
+    states.set(channelKey, new ChannelState(new HashIndex(hashes, exempts)));
   }
   return states;
 };

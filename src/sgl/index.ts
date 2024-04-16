@@ -55,7 +55,7 @@ export async function apply(ctx: Context, config: Config) {
   const sessionsStates = await initializeStates(ctx);
   const getState = (key: string) => {
     if (!sessionsStates.has(key)) {
-      sessionsStates.set(key, ChannelState());
+      sessionsStates.set(key, new ChannelState());
     }
     return sessionsStates.get(key)!;
   };
@@ -79,7 +79,7 @@ export async function apply(ctx: Context, config: Config) {
     // We need to find the HashIndex.
     const channelKey = getChannelKey(session);
     const state = getState(channelKey);
-    const handle = new DatabaseHandle(channelKey, ctx, session, state.index);
+    const handle = new DatabaseHandle(channelKey, ctx, state.index);
 
     const elements = session.elements;
 
@@ -147,7 +147,7 @@ export async function apply(ctx: Context, config: Config) {
             `No similar image found for image #${candidate.index}, with hash ${hashToBinaryString(candidate.hash)}.`,
           );
           // Insert into database without awaiting.
-          resultsPromises.push(handle.insertOrigin(candidate.hash));
+          resultsPromises.push(handle.insertOrigin(candidate.hash, session));
           break;
         case 'exempt':
           ctx.logger.info(
@@ -163,7 +163,7 @@ export async function apply(ctx: Context, config: Config) {
           //  record user information.
           resultsPromises.push(
             handle
-              .addRecordAndQueryOrigin(candidate.key)
+              .addRecordAndQueryOrigin(candidate.key, session)
               .then((origin) => ({ index: candidate.index, ...origin })),
           );
           // Anti-recall.
@@ -189,7 +189,7 @@ export async function apply(ctx: Context, config: Config) {
       }),
     );
     const single = ({ date, nickname }: { date: Date; nickname: string }) =>
-      `在${timeAgo.format(date)}（${
+      `在${timeAgo.format(date, 'round')}（${
         // YYYY年MM月DD日HH时MM分SS秒
         date.toLocaleString('zh-CN', {
           year: 'numeric',
@@ -280,12 +280,7 @@ export async function apply(ctx: Context, config: Config) {
       const state = getState(channelKey);
       try {
         const originId = state.ignore.pop(index);
-        const handle = new DatabaseHandle(
-          channelKey,
-          ctx,
-          session,
-          state.index,
-        );
+        const handle = new DatabaseHandle(channelKey, ctx, state.index);
         await handle.setExempt(originId);
         return '已忽略指定的图片。';
       } catch (e) {
@@ -332,7 +327,7 @@ export async function apply(ctx: Context, config: Config) {
       if (await ignoreOnCommand(session)) return;
       const channelKey = getChannelKey(session);
       const state = getState(channelKey);
-      const handle = new DatabaseHandle(channelKey, ctx, session, state.index);
+      const handle = new DatabaseHandle(channelKey, ctx, state.index);
 
       const duration = options.duration;
       const fromDate = duration

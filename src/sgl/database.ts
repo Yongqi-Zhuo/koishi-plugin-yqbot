@@ -82,25 +82,16 @@ export const declareSchema = (ctx: Context, defaultTolerance: number) => {
 
 // Handle database operations.
 export class DatabaseHandle {
-  private readonly channelKey: string;
-  private readonly ctx: Context;
-  private readonly session: Session;
-  readonly index: HashIndex;
-
   constructor(
-    channelKey: string,
-    ctx: Context,
-    session: Session,
-    index: HashIndex,
-  ) {
-    this.channelKey = channelKey;
-    this.ctx = ctx;
-    this.session = session;
-    this.index = index;
-  }
+    private readonly channelKey: string,
+    private readonly ctx: Context,
+    readonly index: HashIndex,
+  ) {}
 
-  async insertOrigin(hash: HashIndexHash): Promise<undefined> {
-    const { userId, timestamp } = this.session;
+  async insertOrigin(
+    hash: HashIndexHash,
+    { userId, timestamp }: Session,
+  ): Promise<undefined> {
     const { id } = await this.ctx.database.create('sglOrigin', {
       channelKey: this.channelKey,
       hash: hash.toString(),
@@ -113,8 +104,10 @@ export class DatabaseHandle {
   }
 
   // Add a record to the database, and look up the origin.
-  async addRecordAndQueryOrigin(originId: number): Promise<SglOrigin> {
-    const { userId, timestamp } = this.session;
+  async addRecordAndQueryOrigin(
+    originId: number,
+    { userId, timestamp }: Session,
+  ): Promise<SglOrigin> {
     const recordPromise = this.ctx.database.create('sglRecord', {
       channelKey: this.channelKey,
       originId,
