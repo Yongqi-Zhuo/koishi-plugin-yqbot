@@ -1,11 +1,12 @@
 import {} from '@koishijs/assets';
-import { Context, Random, Schema, Session, h } from 'koishi';
+import { Context, Schema, Session, h } from 'koishi';
 import _ from 'underscore';
 
 import { getChannelKey } from '../common';
-import { ChannelState, ChatTemplateKind, inexactFor, kindFor } from './common';
-import { declareSchema } from './database';
-import { DatabaseHandle, initializeStates } from './model';
+import { kindFor } from './common';
+import { Controller } from './controller';
+import { initializeStates } from './model';
+import { declareSchema } from './schema';
 
 export const name = 'chat';
 
@@ -29,10 +30,7 @@ export async function apply(ctx: Context, config: Config) {
   const sessionsStates = await initializeStates(ctx);
   const getHandle = (session: Session) => {
     const key = getChannelKey(session);
-    if (!sessionsStates.has(key)) {
-      sessionsStates.set(key, new ChannelState());
-    }
-    return new DatabaseHandle(key, ctx, sessionsStates.get(key)!);
+    return new Controller(key, ctx, sessionsStates.getState(key));
   };
 
   ctx.middleware(async (session, next) => {
@@ -54,12 +52,12 @@ export async function apply(ctx: Context, config: Config) {
   ctx.command('chat', '自动回复');
 
   ctx
-    .command('chat.remember <question:string> [answer:text]')
+    .command('chat.remember <question:string> [answer:text]', {
+      checkUnknown: true,
+      checkArgCount: true,
+    })
     .option('inexact', '-i')
     .action(async ({ session, options }, question: string, answer?: string) => {
-      if (typeof question !== 'string') {
-        return h.text('参数错误。');
-      }
       if (!answer) {
         await session.send('请提供一个回复。直接输入就行了。');
         // This is the next message.
@@ -86,12 +84,12 @@ export async function apply(ctx: Context, config: Config) {
     });
 
   ctx
-    .command('chat.lookup <question:string>')
+    .command('chat.lookup <question:string>', {
+      checkUnknown: true,
+      checkArgCount: true,
+    })
     .option('inexact', '-i')
     .action(async ({ session, options }, question: string) => {
-      if (typeof question !== 'string') {
-        return h.text('参数错误。');
-      }
       const handle = getHandle(session);
       const kind = kindFor(options.inexact);
       const records = await handle.lookup(kind, question);
@@ -104,12 +102,12 @@ export async function apply(ctx: Context, config: Config) {
     });
 
   ctx
-    .command('chat.forget <question:string> <answer:text>')
+    .command('chat.forget <question:string> <answer:text>', {
+      checkUnknown: true,
+      checkArgCount: true,
+    })
     .option('inexact', '-i')
     .action(async ({ session, options }, question: string, answer: string) => {
-      if (typeof question !== 'string' || typeof answer !== 'string') {
-        return h.text('参数错误。');
-      }
       const handle = getHandle(session);
       // No need to save the answer.
       const kind = kindFor(options.inexact);
