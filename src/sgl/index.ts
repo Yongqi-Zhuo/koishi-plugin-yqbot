@@ -3,18 +3,11 @@ import TimeAgo from 'javascript-time-ago';
 import zh from 'javascript-time-ago/locale/zh';
 import { Context, Schema, Session, h, isInteger } from 'koishi';
 
-import { getChannelKey, getNickname } from '../common';
-import { QueryResult } from './HashIndex';
-import { TOLERANCE_BOUND, hashToBinaryString } from './common';
-import { DatabaseHandle, SglOrigin, declareSchema } from './database';
-import download from './download';
-import {
-  AntiRecallMeta,
-  ChannelState,
-  IgnoreError,
-  initializeStates,
-} from './model';
-import phash from './phash';
+import { getNickname } from '../common';
+import { TOLERANCE_BOUND } from './common';
+import { TortureData, initializeStates } from './controller';
+import { IgnoreError, Image } from './model';
+import { declareSchema } from './schema';
 
 export const name = 'sgl';
 
@@ -37,10 +30,6 @@ export const Config: Schema<Config> = Schema.object({
     ),
 });
 
-type Candidate = { index: number; src: string; title: string } & QueryResult;
-
-type Torture = { index: number } & SglOrigin;
-
 TimeAgo.addLocale(zh);
 const timeAgo = new TimeAgo('zh-CN');
 
@@ -53,11 +42,41 @@ export async function apply(ctx: Context, config: Config) {
 
   // HashIndex for each channel.
   const sessionsStates = await initializeStates(ctx);
-  const getState = (key: string) => {
-    if (!sessionsStates.has(key)) {
-      sessionsStates.set(key, new ChannelState());
+  const getController = (session: Session) =>
+    sessionsStates.getController(session);
+
+  const filterImages = (elements: h[]): [Image[], number] => {
+    const images: Image[] = [];
+    let counter = 0;
+    for (const e of elements) {
+      const { type, attrs } = e;
+      ctx.logger.debug('received raw attributes:', attrs);
+      if (type !== 'img') {
+        continue;
+      }
+      const summary = attrs.summary;
+      if (!attrs.summary) {
+        ctx.logger.error(
+          '`summary` field missing. Use patched Lagrange.Core to use this plugin.',
+        );
+        continue;
+      }
+      ++counter;
+
+      // Mobile QQ is observed to send custom faces as '[动画表情]' with picSubType = 0, which violates the semantics of picSubType.
+      const isCustomFace = summary === '[动画表情]';
+      if (isCustomFace) {
+        ctx.logger.debug('This IS a custom face:', e);
+        // It is usual to send the same custom face multiple times.
+        // Do not count them.
+        continue;
+      } else {
+        ctx.logger.debug('This is NOT a custom face:', e);
+      }
+      images.push({ index: counter, src: attrs.src });
     }
-    return sessionsStates.get(key)!;
+    // Now we have gathered the image.
+    return [images, counter];
   };
 
   // Load configurations.
@@ -77,117 +96,32 @@ export async function apply(ctx: Context, config: Config) {
       return next();
     }
     // We need to find the HashIndex.
-    const channelKey = getChannelKey(session);
-    const state = getState(channelKey);
-    const handle = new DatabaseHandle(channelKey, ctx, state.index);
-
+    const controller = getController(session);
+    // Extract elements.
     const elements = session.elements;
-
-    let counter = 0;
-    const candidatesPromises: Promise<Candidate | null>[] = [];
-    for (const e of elements) {
-      ctx.logger.debug('received raw attributes:', e.attrs);
-      if (e.type !== 'img') {
-        continue;
-      }
-      // TODO: handle this in another function.
-      const picSummary = e.attrs.summary;
-      if (!picSummary) {
-        ctx.logger.error(
-          'Use patched Lagrange.Core to use this plugin. `summary` field missing.',
-        );
-        continue;
-      }
-      ++counter;
-
-      // Mobile QQ is observed to send custom faces as '[动画表情]' with picSubType = 0, which violates the semantics of picSubType.
-      const isCustomFace = picSummary === '[动画表情]';
-      if (isCustomFace) {
-        ctx.logger.debug('This IS a custom face:', e);
-        // It is usual to send the same custom face multiple times.
-        // Do not count them.
-        continue;
-      } else {
-        ctx.logger.debug('This is NOT a custom face:', e);
-      }
-      // Now we have gathered the image.
-
-      // Download
-      const index = counter;
-      const url = e.attrs.src;
-      const title = e.attrs.title;
-      candidatesPromises.push(
-        (async (): Promise<Candidate | null> => {
-          let image: Buffer;
-          try {
-            image = await download(url);
-          } catch (e) {
-            ctx.logger.error('Failed to download image:', e);
-            return null;
-          }
-          // Hash
-          const hash = phash(image);
-          const queryResult = handle.index.query(hash, tolerance);
-          return { index, src: url, title, ...queryResult };
-        })(),
-      );
-    }
-
-    // Now all the downloads and the queries are in progress.
-    // Wait for them to finish.
-    const candidates = (await Promise.all(candidatesPromises)).filter(
-      (candidate): candidate is Candidate => candidate !== null,
+    // Gather images that are not custom faces.
+    const [images, total] = filterImages(elements);
+    // Download and query.
+    const candidates = await controller.processImages(images, tolerance);
+    // Generate tortures.
+    const [tortures, antiRecall] = await controller.generateTortures(
+      candidates,
+      session,
     );
-    const resultsPromises: Promise<Torture | undefined>[] = [];
-    const antiRecall: AntiRecallMeta = { userId: session.userId, images: [] };
-    for (const candidate of candidates) {
-      switch (candidate.kind) {
-        case 'none':
-          ctx.logger.info(
-            `No similar image found for image #${candidate.index}, with hash ${hashToBinaryString(candidate.hash)}.`,
-          );
-          // Insert into database without awaiting.
-          resultsPromises.push(handle.insertOrigin(candidate.hash, session));
-          break;
-        case 'exempt':
-          ctx.logger.info(
-            `Exempted image found for image #${candidate.index}, with hash ${hashToBinaryString(candidate.hash)}.`,
-          );
-          break;
-        case 'found':
-          ctx.logger.info(
-            `Similar image found for image #${candidate.index}, with hash ${hashToBinaryString(candidate.hash)}.`,
-          );
-          // Point this out later. To do this, we must:
-          //  query from database the origin, and
-          //  record user information.
-          resultsPromises.push(
-            handle
-              .addRecordAndQueryOrigin(candidate.key, session)
-              .then((origin) => ({ index: candidate.index, ...origin })),
-          );
-          // Anti-recall.
-          antiRecall.images.push({
-            src: candidate.src,
-            title: candidate.title,
-          });
-          break;
-      }
-    }
 
-    const tortures = (await Promise.all(resultsPromises)).filter(
-      (result): result is Torture => result !== undefined,
-    );
     if (tortures.length === 0) {
       return next();
     }
-    const torturesData = await Promise.all(
-      tortures.map(async (torture) => {
-        const nickname = await getNickname(session, torture.senderId);
-        const date = new Date(torture.timestamp);
-        return { index: torture.index, date, nickname, originId: torture.id };
+
+    // Now process the tortures.
+    const torturesData: TortureData[] = await Promise.all(
+      tortures.map(async ({ image, origin }) => {
+        const nickname = await getNickname(session, origin.senderId);
+        const date = new Date(origin.timestamp);
+        return { index: image.index, date, nickname, originId: origin.id };
       }),
     );
+
     const single = ({ date, nickname }: { date: Date; nickname: string }) =>
       `在${timeAgo.format(date, 'round')}（${
         // YYYY年MM月DD日HH时MM分SS秒
@@ -202,7 +136,7 @@ export async function apply(ctx: Context, config: Config) {
       }）由 ${nickname}`;
     let tortureText: string;
     let tortureEpilogue: string;
-    if (counter === 1) {
+    if (total === 1) {
       assert(torturesData.length === 1);
       tortureText = `这张图片${single(torturesData[0])} 水过了。`;
       tortureEpilogue = '请发送 /sgl ignore 来忽略。';
@@ -222,13 +156,10 @@ export async function apply(ctx: Context, config: Config) {
     ]);
 
     // If there are tortures, we should give user a chance to ignore.
-    state.ignore.reset(
-      torturesData.map(({ index, originId }) => [index, originId]),
-    );
+    controller.resetIgnore(torturesData);
 
     // Anti-recall.
-    state.antiRecall.set(messageId, antiRecall);
-    ctx.setTimeout(() => state.antiRecall.delete(messageId), 1000 * 60 * 5); // 5 minutes
+    controller.resetAntiRecall(messageId, antiRecall);
 
     // sgl is independent of other middlewares.
     return next();
@@ -274,14 +205,12 @@ export async function apply(ctx: Context, config: Config) {
       '标记一张图片为表情包，使之不再被查重。',
     )
     .channelFields(['sglEnabled'])
-    .action(async ({ session }, index) => {
+    .action(async ({ session }, index?: number) => {
       if (await ignoreOnCommand(session)) return;
-      const channelKey = getChannelKey(session);
-      const state = getState(channelKey);
+      const controller = getController(session);
       try {
-        const originId = state.ignore.pop(index);
-        const handle = new DatabaseHandle(channelKey, ctx, state.index);
-        await handle.setExempt(originId);
+        const originId = controller.popIgnore(index);
+        await controller.setExempt(originId);
         return '已忽略指定的图片。';
       } catch (e) {
         if (e instanceof IgnoreError) {
@@ -299,19 +228,17 @@ export async function apply(ctx: Context, config: Config) {
     if (session.isDirect) {
       return;
     }
-    const channelKey = getChannelKey(session);
-    const state = getState(channelKey);
+    const controller = getController(session);
     const messageId = session.messageId;
-    if (!state.antiRecall.has(messageId)) {
+    const antiRecall = controller.checkAntiRecall(messageId);
+    if (antiRecall === null) {
       return;
     }
-    const antiRecall = state.antiRecall.get(messageId)!;
-    state.antiRecall.delete(messageId);
 
     const nickname = await getNickname(session, antiRecall.userId);
     await session.send([
       h.text(`${nickname} 被 yqbot 查重之后把消息撤回啦！以下是撤回的图片：`),
-      ...antiRecall.images.map(({ src, title }) => h.image(src, { title })),
+      ...antiRecall.images.map(({ src }) => h.image(src)),
     ]);
   });
 
@@ -325,16 +252,14 @@ export async function apply(ctx: Context, config: Config) {
     )
     .action(async ({ session, options }) => {
       if (await ignoreOnCommand(session)) return;
-      const channelKey = getChannelKey(session);
-      const state = getState(channelKey);
-      const handle = new DatabaseHandle(channelKey, ctx, state.index);
+      const controller = getController(session);
 
       const duration = options.duration;
       const fromDate = duration
         ? Date.now() - duration * 24 * 60 * 60 * 1000
         : 0;
       const durationText = duration ? `最近 ${duration} 天` : '过去所有时间';
-      const rankings = await handle.rankings(fromDate);
+      const rankings = await controller.rankings(fromDate);
 
       if (rankings.length === 0) {
         return '暂无数据。';

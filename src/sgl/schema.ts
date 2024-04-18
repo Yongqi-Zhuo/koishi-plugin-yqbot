@@ -1,6 +1,4 @@
-import { $, Context, Session } from 'koishi';
-
-import HashIndex, { Hash as HashIndexHash } from './HashIndex';
+import { Context } from 'koishi';
 
 declare module 'koishi' {
   interface Tables {
@@ -79,67 +77,3 @@ export const declareSchema = (ctx: Context, defaultTolerance: number) => {
     },
   });
 };
-
-// Handle database operations.
-export class DatabaseHandle {
-  constructor(
-    private readonly channelKey: string,
-    private readonly ctx: Context,
-    readonly index: HashIndex,
-  ) {}
-
-  async insertOrigin(
-    hash: HashIndexHash,
-    { userId, timestamp }: Session,
-  ): Promise<undefined> {
-    const { id } = await this.ctx.database.create('sglOrigin', {
-      channelKey: this.channelKey,
-      hash: hash.toString(),
-      senderId: userId,
-      timestamp,
-      exempt: false,
-    });
-    this.index.insert({ key: id, hash });
-    return;
-  }
-
-  // Add a record to the database, and look up the origin.
-  async addRecordAndQueryOrigin(
-    originId: number,
-    { userId, timestamp }: Session,
-  ): Promise<SglOrigin> {
-    const recordPromise = this.ctx.database.create('sglRecord', {
-      channelKey: this.channelKey,
-      originId,
-      userId,
-      timestamp,
-    });
-    const originPromise = this.ctx.database.get('sglOrigin', originId);
-    // Interleave the two promises.
-    const [_, origin] = await Promise.all([recordPromise, originPromise]);
-    return origin[0];
-  }
-
-  async setExempt(originId: number) {
-    this.index.setExempt(originId);
-    await this.ctx.database.set('sglOrigin', originId, {
-      exempt: true,
-    });
-  }
-
-  async rankings(fromDate: number): Promise<Ranking[]> {
-    return await this.ctx.database
-      .select('sglRecord')
-      .where((row) =>
-        $.and(
-          $.eq(row.channelKey, this.channelKey),
-          $.gte(row.timestamp, fromDate),
-        ),
-      )
-      .groupBy('userId', {
-        count: (row) => $.count(row.id),
-      })
-      .orderBy('count', 'desc')
-      .execute();
-  }
-}
