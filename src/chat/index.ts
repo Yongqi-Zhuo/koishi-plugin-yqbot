@@ -4,8 +4,7 @@ import _ from 'underscore';
 
 import { getChannelKey } from '../common';
 import { kindFor } from './common';
-import { Controller } from './controller';
-import { initializeStates } from './model';
+import { Controller, initializeStates } from './controller';
 import { declareSchema } from './schema';
 
 export const name = 'chat';
@@ -28,10 +27,8 @@ export async function apply(ctx: Context, config: Config) {
   if (!config.enabled) return;
 
   const sessionsStates = await initializeStates(ctx);
-  const getHandle = (session: Session) => {
-    const key = getChannelKey(session);
-    return new Controller(key, ctx, sessionsStates.getState(key));
-  };
+  const getController = (session: Session) =>
+    sessionsStates.getController(session);
 
   ctx.middleware(async (session, next) => {
     if (!_.all(session.elements, (e) => e.type === 'text')) {
@@ -39,7 +36,7 @@ export async function apply(ctx: Context, config: Config) {
       return next();
     }
     const question = session.content;
-    const handle = getHandle(session);
+    const handle = getController(session);
     const answer = await handle.answer(question);
     if (!answer) {
       // No answer found.
@@ -76,7 +73,7 @@ export async function apply(ctx: Context, config: Config) {
           return h('face', attrs);
         },
       });
-      const handle = getHandle(session);
+      const handle = getController(session);
       const savedAnswer = await ctx.assets.transform(answer);
       const kind = kindFor(options.inexact);
       await handle.remember(kind, question, savedAnswer, session);
@@ -90,7 +87,7 @@ export async function apply(ctx: Context, config: Config) {
     })
     .option('inexact', '-i')
     .action(async ({ session, options }, question: string) => {
-      const handle = getHandle(session);
+      const handle = getController(session);
       const kind = kindFor(options.inexact);
       const records = await handle.lookup(kind, question);
       if (records.length === 0) {
@@ -108,7 +105,7 @@ export async function apply(ctx: Context, config: Config) {
     })
     .option('inexact', '-i')
     .action(async ({ session, options }, question: string, answer: string) => {
-      const handle = getHandle(session);
+      const handle = getController(session);
       // No need to save the answer.
       const kind = kindFor(options.inexact);
       const success = await handle.forget(kind, question, answer);
@@ -124,7 +121,7 @@ export async function apply(ctx: Context, config: Config) {
       if (!ids || ids.length === 0) {
         return h.text('只需要提供要删除的回复的序号。');
       }
-      const handle = getHandle(session);
+      const handle = getController(session);
       const { success, failure } = await handle.remove(ids);
       if (failure.length === 0) {
         return h.text(`已删除这${success.length > 1 ? '些' : '个'}回复。`);
@@ -139,9 +136,9 @@ export async function apply(ctx: Context, config: Config) {
     .command('chat.list')
     .option('inexact', '-i')
     .action(async ({ session, options }) => {
-      const handle = getHandle(session);
+      const handle = getController(session);
       const kind = kindFor(options.inexact);
-      const questions = handle.state.list(kind);
+      const questions = handle.list(kind);
       if (questions.length === 0) {
         return h.text('没有保存的回复。');
       }

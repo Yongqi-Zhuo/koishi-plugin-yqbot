@@ -1,5 +1,6 @@
-import { Context, Random, Session } from 'koishi';
+import { Context, Session } from 'koishi';
 
+import { createChannelwiseStorage } from '../channelwise';
 import { ChatTemplateKind, inexactFor, kindFor } from './common';
 import { State } from './model';
 
@@ -7,23 +8,14 @@ export type BatchedRemovalResult = { success: number[]; failure: number[] };
 
 export class Controller {
   constructor(
-    private readonly channelKey: string,
     private readonly ctx: Context,
-    readonly state: State,
+    private readonly channelKey: string,
+    private readonly state: State,
   ) {}
 
   async answer(question: string): Promise<string | null> {
-    const ids = this.state.get('eq', question) || [];
-    // If there is no exact match, try to find a match in cn.
-    if (ids.length === 0) {
-      for (const [q, qIds] of this.state.cn) {
-        if (question.includes(q)) {
-          ids.push(...qIds);
-        }
-      }
-      if (ids.length === 0) return null;
-    }
-    const id = Random.pick(ids);
+    const id = this.state.answer(question);
+    if (id === null) return null;
     const [{ answer }] = await this.ctx.database.get('chat', id, ['answer']);
     return answer;
   }
@@ -42,12 +34,12 @@ export class Controller {
       timestamp,
       author: userId,
     });
-    this.state.getOrDefault(kind, question).push(id);
+    this.state.remember(kind, question, id);
   }
 
   async lookup(kind: ChatTemplateKind, question: string) {
-    const ids = this.state.get(kind, question);
-    if (!ids) return [];
+    const ids = this.state.lookup(kind, question);
+    if (ids.length === 0) return [];
     return await this.ctx.database.get(
       'chat',
       {
@@ -71,7 +63,7 @@ export class Controller {
     });
     if (!result) return false;
     await this.ctx.database.remove('chat', result.id);
-    this.state.removeFrom(kind, question, result.id);
+    this.state.remove(kind, question, result.id);
     return true;
   }
 
@@ -84,7 +76,7 @@ export class Controller {
     await this.ctx.database.remove('chat', recordsIds);
     const rest = new Set(ids);
     for (const { inexact, question, id } of records) {
-      this.state.removeFrom(kindFor(inexact), question, id);
+      this.state.remove(kindFor(inexact), question, id);
       rest.delete(id);
     }
     return {
@@ -92,4 +84,13 @@ export class Controller {
       failure: Array.from(rest),
     };
   }
+
+  list(kind: ChatTemplateKind): string[] {
+    return this.state.list(kind);
+  }
 }
+
+export const initializeStates = async (ctx: Context) => {
+  const storage = await createChannelwiseStorage(ctx, 'chat', State);
+  return storage.withController(Controller);
+};

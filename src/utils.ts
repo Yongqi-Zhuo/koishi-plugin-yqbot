@@ -17,3 +17,25 @@ export function* zip<T extends Array<any>>(
     yield results.map(({ value }) => value) as T;
   }
 }
+
+export function functionalizeConstructor<S>(
+  ctor: (new () => S) | (() => S),
+): () => S {
+  'use strict';
+  try {
+    // If `ctor` is a constructor, we must use `new`. So this will throw an error.
+    const res = (ctor as () => S)();
+    if (res === undefined) {
+      // Maybe this is a constructor.
+      return () => new (ctor as new () => S)();
+    }
+    return ctor as () => S;
+  } catch (e) {
+    if (e instanceof TypeError) {
+      return () => new (ctor as new () => S)();
+    } else {
+      // This is not a TypeError. We should rethrow it.
+      throw e;
+    }
+  }
+}
