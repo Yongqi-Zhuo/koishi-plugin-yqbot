@@ -12,3 +12,4 @@ ar rcs lib/libyqrt.a lib/yqrt.o
 # Clean up
 rm lib/*.o
 rm -r src
+rm build.sh

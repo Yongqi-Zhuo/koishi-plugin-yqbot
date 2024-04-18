@@ -18,6 +18,8 @@ yqbot 可以运行一些简单的代码和 shell 命令。目前支持的语言�
 - C++
 - Python
 
+若要正常使用 yqrt，请勿将 koishi 运行于 Docker 容器之中，因为无法嵌套 namespace。
+
 由于隔离运行机制需要 firejail 的支持，因此需要在服务器上安装 [firejail](https://github.com/netblue30/firejail)。例如在 Ubuntu 上，你需要
 
 ```bash

@@ -60,7 +60,7 @@ const firejailCommand = 'firejail';
 function getFirejailProfileFilePath(
   profileName: 'sandbox' | 'execute',
 ): string {
-  return path.join(__dirname, 'firejail', `${profileName}.profile`);
+  return path.join(__dirname, `${profileName}.profile`);
 }
 
 function executeDirect(

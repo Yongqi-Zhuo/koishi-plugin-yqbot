@@ -2,18 +2,33 @@ import Docker from 'dockerode';
 import { Context, Schema } from 'koishi';
 
 import buildImage from './build';
-import { createContainer, removeContainer, runContainer } from './container';
+import Container from './container';
+import { Manager } from './manager';
+import { CreationResult } from './model';
 
 export const name = 'yqrt-docker';
 
+export const inject = ['database'];
+
 export interface Config {
+  concurrency: number;
   timeoutCompile: number;
   timeoutRun: number;
 }
 
 export const Config: Schema<Config> = Schema.object({
-  timeoutCompile: Schema.number(),
-  timeoutRun: Schema.number(),
+  concurrency: Schema.natural()
+    .default(1)
+    .min(1)
+    .description('Number of concurrent tasks.'),
+  timeoutCompile: Schema.number()
+    .default(10000)
+    .min(100)
+    .description('Timeout for compilation in milliseconds.'),
+  timeoutRun: Schema.number()
+    .default(2000)
+    .min(100)
+    .description('Timeout for running code in milliseconds.'),
 });
 
 declare module 'koishi' {
@@ -23,19 +38,37 @@ declare module 'koishi' {
 }
 
 export async function apply(ctx: Context, config: Config) {
+  ctx.model.extend('channel', {
+    yqprograms: 'list',
+  });
+
   const docker = new Docker();
   // Build the runtime image
   await buildImage(docker);
 
-  ctx.model.extend('channel', {
-    yqprograms: 'list',
+  const manager = new Manager(
+    ctx,
+    docker,
+    config.concurrency,
+    {
+      timeout: config.timeoutCompile,
+    },
+    {
+      timeout: config.timeoutRun,
+    },
+  );
+
+  manager.start();
+
+  ctx.on('dispose', async () => {
+    await manager.close();
   });
 
   ctx
     .command('yqrt.list', 'List all yqrt programs in the channel.')
     .channelFields(['yqprograms'])
     .action(({ session }) => {
-      if (!session.channel.yqprograms.length) {
+      if (!session.channel?.yqprograms?.length) {
         return 'No programs yet.';
       }
       return session.channel.yqprograms.join('\n');
@@ -45,16 +78,13 @@ export async function apply(ctx: Context, config: Config) {
     .command('yqrt.add <code:text>', 'Add a yqrt program to the channel.')
     .channelFields(['yqprograms'])
     .action(async ({ session }, code) => {
-      let container: string;
       try {
-        container = await createContainer(docker, code, {
-          timeout: config.timeoutCompile,
-        });
+        const { id, initialResponse } = await manager.create(code);
+        session.channel.yqprograms.push(id);
+        return `Program added: ${id}\n${initialResponse}`;
       } catch (error) {
         return `Failed to create container: ${error.message}`;
       }
-      session.channel.yqprograms.push(container);
-      return `Program added: ${container}`;
     });
 
   ctx
@@ -65,13 +95,10 @@ export async function apply(ctx: Context, config: Config) {
         return 'Program not found.';
       }
       try {
-        const response = await runContainer(
-          docker,
-          id,
-          { type: 'message', data: input },
-          { timeout: config.timeoutRun },
-        );
-        return response;
+        return await manager.run(id, {
+          type: 'message',
+          data: input,
+        });
       } catch (error) {
         return `Failed to run container: ${error.message}`;
       }
@@ -82,14 +109,15 @@ export async function apply(ctx: Context, config: Config) {
       'yqrt.remove <id:string>',
       'Remove a yqrt program from the channel.',
     )
+    .option('force', '-f')
     .channelFields(['yqprograms'])
-    .action(async ({ session }, id) => {
+    .action(async ({ session, options }, id) => {
       const index = session.channel.yqprograms.indexOf(id);
       if (index === -1) {
         return 'Program not found.';
       }
       try {
-        await removeContainer(docker, id);
+        await manager.remove(id, options.force ?? false);
       } catch (error) {
         return `Failed to remove container: ${error.message}`;
       }
