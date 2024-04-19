@@ -3,15 +3,9 @@ import { Context, Session, Tables } from 'koishi';
 import { getChannelKey } from './common';
 import { functionalizeConstructor } from './utils';
 
-export interface ChannelwiseSchema {
+export type ChannelwiseSchema = {
   channelKey: string;
-}
-
-type ChannelwiseTableNames = {
-  [Table in keyof Tables]: Tables[Table] extends ChannelwiseSchema
-    ? Table
-    : never;
-}[keyof Tables];
+};
 
 const getKey = (keyOrSession: string | Session): string =>
   typeof keyOrSession === 'string' ? keyOrSession : getChannelKey(keyOrSession);
@@ -25,7 +19,6 @@ type ControllerConstructor<State, Controller> = new (
 // The storage keeps a state for each channel.
 class ChannelwiseStorage<State> {
   constructor(
-    readonly ctx: Context,
     readonly storage: Map<string, State>,
     readonly StateConstructor: () => State,
   ) {}
@@ -39,10 +32,11 @@ class ChannelwiseStorage<State> {
   }
 
   withController<Controller>(
+    ctx: Context,
     ControllerConstructor: ControllerConstructor<State, Controller>,
   ): ChannelwiseStorageWithController<State, Controller> {
     return new ChannelwiseStorageWithController(
-      this.ctx,
+      ctx,
       this.storage,
       this.StateConstructor,
       ControllerConstructor,
@@ -56,12 +50,12 @@ class ChannelwiseStorageWithController<
   Controller,
 > extends ChannelwiseStorage<State> {
   constructor(
-    ctx: Context,
+    readonly ctx: Context,
     storage: Map<string, State>,
     StateConstructor: () => State,
     readonly ControllerConstructor: ControllerConstructor<State, Controller>,
   ) {
-    super(ctx, storage, StateConstructor);
+    super(storage, StateConstructor);
   }
 
   getController(keyOrSession: string | Session): Controller {
@@ -73,22 +67,18 @@ class ChannelwiseStorageWithController<
 type StateReducer<State, Row> = (state: State, row: Row) => State | undefined;
 type AccumulativeState<Row> = { accumulate: (row: Row) => void };
 
-async function createChannelwiseStorageComplex<
-  TableName extends ChannelwiseTableNames,
+function createChannelwiseStorageComplex<
+  Schema extends ChannelwiseSchema,
   State,
   Medium,
 >(
-  ctx: Context,
-  table: TableName,
+  data: Schema[],
   StateConstructor: () => State,
-  reducer: StateReducer<Medium, Tables[TableName]>,
+  reducer: StateReducer<Medium, Schema>,
   prologue: () => Medium,
   epilogue: (state: Medium) => State,
-): Promise<ChannelwiseStorage<State>> {
+): ChannelwiseStorage<State> {
   const media = new Map<string, Medium>();
-  type Row = Tables[TableName];
-  // It seems the typing system of koishi is not perfect.
-  const data = (await ctx.database.select(table).execute()) as Row[];
   // Aggregate the data.
   for (const row of data) {
     const key = row.channelKey;
@@ -105,22 +95,18 @@ async function createChannelwiseStorageComplex<
   }
   // Convert the data to states.
   const states = new Map(Array.from(media, ([k, v]) => [k, epilogue(v)]));
-  return new ChannelwiseStorage(ctx, states, StateConstructor);
+  return new ChannelwiseStorage(states, StateConstructor);
 }
 
-async function createChannelwiseStorageSimple<
-  TableName extends ChannelwiseTableNames,
+function createChannelwiseStorageSimple<
+  Schema extends ChannelwiseSchema,
   State,
 >(
-  ctx: Context,
-  table: TableName,
+  data: Schema[],
   StateConstructor: () => State,
-  reducer: StateReducer<State, Tables[TableName]>,
-): Promise<ChannelwiseStorage<State>> {
+  reducer: StateReducer<State, Schema>,
+): ChannelwiseStorage<State> {
   const states = new Map<string, State>();
-  type Row = Tables[TableName];
-  // It seems the typing system of koishi is not perfect.
-  const data = (await ctx.database.select(table).execute()) as Row[];
   // Aggregate the data.
   for (const row of data) {
     const key = row.channelKey;
@@ -135,67 +121,62 @@ async function createChannelwiseStorageSimple<
       states.set(key, ret);
     }
   }
-  return new ChannelwiseStorage(ctx, states, StateConstructor);
+  return new ChannelwiseStorage(states, StateConstructor);
 }
 
 // With this function, you can first perform a reduction on the data, and then convert the data to states.
 export function createChannelwiseStorage<
-  TableName extends ChannelwiseTableNames,
+  Schema extends ChannelwiseSchema,
   State,
   Medium,
 >(
-  ctx: Context,
-  table: TableName,
+  data: Schema[],
   // Pass a class name or a factory function.
   StateConstructor: (new () => State) | (() => State),
   // Reduce the data to the intermediate state. If the return value is not undefined, it will be used as the new intermediate state.
-  reducer: StateReducer<Medium, Tables[TableName]>,
+  reducer: StateReducer<Medium, Schema>,
   // Initial intermediate state.
   prologue: () => Medium,
   // Convert the intermediate state to the final state.
   epilogue: (state: Medium) => State,
-): Promise<ChannelwiseStorage<State>>;
+): ChannelwiseStorage<State>;
 
 // With this function, you can directly convert the data to states.
 export function createChannelwiseStorage<
-  TableName extends ChannelwiseTableNames,
+  Schema extends ChannelwiseSchema,
   State,
 >(
-  ctx: Context,
-  table: TableName,
+  data: Schema[],
   // Pass a class name or a factory function.
   StateConstructor: (new () => State) | (() => State),
   // Reduce the data to the state. If the return value is not undefined, it will be used as the new state. If the state is accumulative, a default reducer is provided, which is the below overload.
-  reducer: StateReducer<State, Tables[TableName]>,
-): Promise<ChannelwiseStorage<State>>;
+  reducer: StateReducer<State, Schema>,
+): ChannelwiseStorage<State>;
 
 // Same as above. But the reducer is optional.
 export function createChannelwiseStorage<
-  TableName extends ChannelwiseTableNames,
-  State extends AccumulativeState<Tables[TableName]>,
+  Schema extends ChannelwiseSchema,
+  State extends AccumulativeState<Schema>,
 >(
-  ctx: Context,
-  table: TableName,
+  data: Schema[],
   StateConstructor: (new () => State) | (() => State),
-  reducer?: StateReducer<State, Tables[TableName]>,
-): Promise<ChannelwiseStorage<State>>;
+  reducer?: StateReducer<State, Schema>,
+): ChannelwiseStorage<State>;
 
-export async function createChannelwiseStorage<
-  TableName extends ChannelwiseTableNames,
+export function createChannelwiseStorage<
+  Schema extends ChannelwiseSchema,
   State,
 >(
-  ctx: Context,
-  table: TableName,
+  data: Schema[],
   StateConstructor: (new () => State) | (() => State),
-  reducer?: StateReducer<any, Tables[TableName]>,
+  reducer?: StateReducer<any, Schema>,
   prologue?: () => any,
   epilogue?: (state: any) => State,
-): Promise<ChannelwiseStorage<State>> {
+): ChannelwiseStorage<State> {
   StateConstructor = functionalizeConstructor(StateConstructor);
   if (prologue !== undefined && epilogue !== undefined) {
     return createChannelwiseStorageComplex(
-      ctx,
-      table,
+      data,
       StateConstructor,
       reducer,
       prologue,
@@ -204,19 +185,11 @@ export async function createChannelwiseStorage<
   } else if (prologue === undefined && epilogue === undefined) {
     if (reducer === undefined) {
       // Default reducer.
-      reducer = (
-        state: AccumulativeState<Tables[TableName]>,
-        row: Tables[TableName],
-      ): undefined => {
+      reducer = (state: AccumulativeState<Schema>, row: Schema): undefined => {
         state.accumulate(row);
       };
     }
-    return createChannelwiseStorageSimple(
-      ctx,
-      table,
-      StateConstructor,
-      reducer,
-    );
+    return createChannelwiseStorageSimple(data, StateConstructor, reducer);
   }
   throw new Error('prologue and epilogue must be both defined or undefined.');
 }

@@ -152,9 +152,8 @@ export const initializeStates = async (ctx: Context) => {
     hashes: HashIndexHashes;
     exempts: HashIndexExempts;
   };
-  const storage = await createChannelwiseStorage(
-    ctx,
-    'sglOrigin',
+  const storage = createChannelwiseStorage(
+    await ctx.database.select('sglOrigin').execute(),
     State,
     ({ hashes, exempts }: Origins, origin: SglOrigin): undefined => {
       hashes.set(origin.id, BigInt(origin.hash));
@@ -163,7 +162,8 @@ export const initializeStates = async (ctx: Context) => {
       }
     },
     () => ({ hashes: new Map(), exempts: new Set() }),
-    ({ hashes, exempts }: Origins) => new State(new HashIndex(hashes, exempts)),
+    ({ hashes, exempts }: Origins): State =>
+      new State(new HashIndex(hashes, exempts)),
   );
-  return storage.withController(Controller);
+  return storage.withController(ctx, Controller);
 };

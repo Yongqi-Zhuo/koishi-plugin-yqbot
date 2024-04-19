@@ -21,12 +21,19 @@ int main(int argc, char *argv[]) {
     std::cin.read(&text[0], len);
     if (!std::cin) {
       std::cerr << "Bad input." << std::endl;
-      break;
+      return 1;
     }
     std::cerr << "Received event: " << event << ", length: " << len
               << ", text: " << text << std::endl;
-    yqrt_message_t message = {text.c_str()};
-    on_message(&message);
+    if (event == "init") {
+      std::cout << "OK" << std::endl;
+    } else if (event == "message") {
+      yqrt_message_t message = {text.c_str()};
+      on_message(&message);
+    } else {
+      std::cerr << "Unknown event: " << event << std::endl;
+      return 1;
+    }
     // Use escape sequence to signal the end of the event.
     std::cout << '\x07';
     std::cout.flush();

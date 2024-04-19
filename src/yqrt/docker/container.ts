@@ -1,18 +1,55 @@
-import Docker, { ContainerStartOptions } from 'dockerode';
-import fs from 'fs';
+import Docker, {
+  ContainerCreateOptions,
+  ContainerInspectOptions,
+  ContainerStartOptions,
+} from 'dockerode';
+import { Logger } from 'koishi';
 import { PassThrough } from 'stream';
+import tar from 'tar-stream';
 
-import { makeTempDir } from '../common';
-import { CheckpointKey, EscapeSequence, ImageName } from './common';
-import { ExecutionOptions, RuntimeEvent, encodeEvent } from './model';
+import {
+  CheckpointKey,
+  EscapeSequence,
+  ExecutionOptions,
+  ImageName,
+  RuntimeEvent,
+  encodeEvent,
+} from './common';
+import {
+  ContainerMetadata,
+  containerMetadataFromLabels,
+  containerMetadataToLabels,
+  isYqrtContainer,
+} from './schema';
 
-const getConfig = (tempDir?: string) => ({
+const logger = new Logger('yqrt-docker-container');
+
+declare module 'dockerode' {
+  interface ContainerStartOptions {
+    _query?: {
+      checkpoint?: string;
+    };
+    _body?: {};
+  }
+  interface ContainerInspectOptions {
+    _query?: {
+      size?: boolean;
+    };
+    _body?: {};
+  }
+  interface ContainerInspectInfo {
+    SizeRw?: number;
+    SizeRootFs?: number;
+  }
+}
+
+const getConfig = (metadata: ContainerMetadata): ContainerCreateOptions => ({
   HostConfig: {
-    Binds: tempDir ? [`${tempDir}:/mnt`] : [],
     CapDrop: ['ALL'],
-    NetworkMode: 'none',
     Memory: 256 * 1024 * 1024, // 256 MB
     MemorySwap: 256 * 1024 * 1024, // 256 MB
+    NetworkMode: 'none',
+    OomScoreAdj: 1000,
     PidsLimit: 16,
     Ulimits: [
       {
@@ -21,11 +58,11 @@ const getConfig = (tempDir?: string) => ({
         Hard: 32,
       },
     ],
-    OomScoreAdj: 1000,
   },
   Image: ImageName,
-  Tty: false,
+  Labels: containerMetadataToLabels(metadata),
   OpenStdin: true,
+  Tty: false,
 });
 
 export class ContainerError extends Error {
@@ -40,15 +77,17 @@ export default class Container {
     private readonly inner: Docker.Container,
     // This is maintained by ourselves.
     private running: boolean,
+    readonly metadata: ContainerMetadata,
   ) {}
 
   static async Connect(docker: Docker, id: string): Promise<Container> {
     const inner = docker.getContainer(id);
-    // Pretend that the container is not running.
-    const wrapped = new Container(inner, false);
-    // Now set the running status.
-    wrapped.running = await wrapped.isRunning();
-    return wrapped;
+    const info = await inner.inspect();
+    return new Container(
+      inner,
+      info.State.Running,
+      containerMetadataFromLabels(info.Config.Labels),
+    );
   }
 
   // Check the maintained value.
@@ -64,15 +103,14 @@ export default class Container {
     return this.inner.id;
   }
 
-  private async inspect() {
-    const info = await this.inner.inspect();
-    return info.State;
+  get channelKey(): string {
+    return this.metadata.channelKey;
   }
 
   // This is the source of truth.
   async isRunning(): Promise<boolean> {
-    const state = await this.inspect();
-    return state.Running;
+    const info = await this.inner.inspect();
+    return info.State.Running;
   }
 
   private async checkpoint() {
@@ -102,7 +140,7 @@ export default class Container {
     await this.inner.start({
       _query: { checkpoint: CheckpointKey },
       _body: {},
-    } as ContainerStartOptions);
+    });
     this.running = true;
   }
 
@@ -114,10 +152,11 @@ export default class Container {
     this.running = false;
   }
 
+  // stdout and stderr.
   private async emitEvent(
     event: RuntimeEvent,
     options: ExecutionOptions,
-  ): Promise<string> {
+  ): Promise<[string, string]> {
     this.assertRunning(true);
     const streamWrite = await this.inner.attach({
       stream: true,
@@ -130,7 +169,7 @@ export default class Container {
     this.inner.modem.demuxStream(streamWrite, streamReadOut, streamReadErr);
 
     streamReadOut.setEncoding('utf8');
-    streamReadErr.resume();
+    streamReadErr.setEncoding('utf8');
 
     // Send the event
     const encoded = encodeEvent(event);
@@ -145,10 +184,16 @@ export default class Container {
     );
 
     // Read: response + EscapeSequence
-    const response = await new Promise<string>((resolve, reject) => {
+    const response = await new Promise<[string, string]>((resolve, reject) => {
       let buffer = '';
+      let bufferErr = '';
       const timer = setTimeout(
-        () => reject(new ContainerError('Execution timed out')),
+        () =>
+          reject(
+            new ContainerError(
+              `Execution timed out.\nstdout: ${buffer}\nstderr: ${bufferErr}`,
+            ),
+          ),
         options.timeout,
       );
       streamReadOut.on('data', (chunk: string) => {
@@ -162,57 +207,92 @@ export default class Container {
               ),
             );
           } else {
-            return resolve(buffer + chunk.slice(0, end));
+            buffer += chunk.slice(0, end);
+            return resolve([buffer, bufferErr]);
           }
         } else {
           buffer += chunk;
         }
+      });
+      streamReadErr.on('data', (chunk: string) => {
+        bufferErr += chunk;
       });
     });
 
     return response;
   }
 
-  async run(event: RuntimeEvent, options: ExecutionOptions): Promise<string> {
+  async run(
+    event: RuntimeEvent,
+    options: ExecutionOptions,
+  ): Promise<[string, string]> {
     this.assertRunning(false);
+
     // First restore from checkpoint.
     await this.startFromCheckpoint();
+
     // Now that we are runnning, remove the checkpoint.
     await this.removeCheckpoint();
+
     // Then communicate with the container.
     const response = await this.emitEvent(event, options);
+
+    // We need to do some checks.
+    const info = await this.inner.inspect({
+      _query: { size: true },
+      _body: {},
+    });
+    // The container must not use up too much disk space.
+    if (info.SizeRw > 128 * 1024 * 1024) {
+      throw new ContainerError('Container used too much disk space.');
+    }
+
     await this.checkpoint();
     return response;
+  }
+
+  async upload(content: string, filename: string, path: string) {
+    // Archive the content.
+    const archive = tar.pack();
+    archive.entry({ name: filename }, content);
+    archive.finalize();
+    await this.inner.putArchive(archive, { path });
   }
 
   // Create a container from the source code of a yqrt program.
   static async Create(
     docker: Docker,
     source: string,
+    metadata: ContainerMetadata,
     options: ExecutionOptions,
-  ): Promise<[Container, string]> {
-    const tempDir = await makeTempDir();
-    // Dump the source code to a file
-    await fs.promises.writeFile(`${tempDir}/yqprogram.cpp`, source);
-    const inner = await docker.createContainer(getConfig(tempDir));
+  ): Promise<[Container, [string, string]]> {
+    const inner = await docker.createContainer(getConfig(metadata));
     // Newly created container is guaranteed to not be running.
-    const wrapped = new Container(inner, false);
+    const wrapped = new Container(inner, false, metadata);
 
-    // This should compile the source code and run the program.
     try {
+      // Start the container.
       await wrapped.start();
-      // TODO: pass the response back to the caller
+
+      // Upload the source code.
+      await wrapped.upload(source, 'yqprogram.cpp', '/app/');
+
+      // Tell the container to stop waiting.
+      const [started] = await wrapped.emitEvent(
+        { type: 'start', data: '' },
+        options,
+      );
+      if (started !== 'started') {
+        throw new ContainerError('Script is bad.');
+      }
+
+      // Now the script compiles the source code and runs the program.
+
+      // Send an init event.
       const initialResponse = await wrapped.emitEvent(
         { type: 'init', data: '' },
         options,
       );
-
-      // We should check if compilation failed.
-      // The executable is expected to be in ${tempDir}/yqprogram.
-      const stats = await fs.promises.stat(`${tempDir}/yqprogram`);
-      if (!stats.isFile()) {
-        throw new ContainerError('Compilation failed.');
-      }
 
       // Check if the container is still running.
       if (!(await wrapped.isRunning())) {
@@ -232,3 +312,15 @@ export default class Container {
     }
   }
 }
+
+export const getAllContainers = async (
+  docker: Docker,
+): Promise<Container[]> => {
+  const allContainers = await docker.listContainers({ all: true });
+  const yqrtContainers = allContainers.filter(({ Labels }) =>
+    isYqrtContainer(Labels),
+  );
+  return await Promise.all(
+    yqrtContainers.map(({ Id }) => Container.Connect(docker, Id)),
+  );
+};

@@ -1,10 +1,10 @@
 import Docker from 'dockerode';
 import { Context, Schema } from 'koishi';
 
+import { getChannelKey } from '../../common';
+import Queue from './Queue';
 import buildImage from './build';
-import Container from './container';
-import { Manager } from './manager';
-import { CreationResult } from './model';
+import { initializeStates } from './controller';
 
 export const name = 'yqrt-docker';
 
@@ -31,56 +31,52 @@ export const Config: Schema<Config> = Schema.object({
     .description('Timeout for running code in milliseconds.'),
 });
 
-declare module 'koishi' {
-  interface Channel {
-    yqprograms: string[];
-  }
-}
-
 export async function apply(ctx: Context, config: Config) {
-  ctx.model.extend('channel', {
-    yqprograms: 'list',
-  });
-
   const docker = new Docker();
   // Build the runtime image
   await buildImage(docker);
 
-  const manager = new Manager(
+  const sessionsStates = await initializeStates(
     ctx,
     docker,
-    config.concurrency,
-    {
-      timeout: config.timeoutCompile,
-    },
-    {
-      timeout: config.timeoutRun,
-    },
+    { timeout: config.timeoutCompile },
+    { timeout: config.timeoutRun },
   );
-
-  manager.start();
+  const queue = new Queue(config.concurrency);
+  queue.start();
 
   ctx.on('dispose', async () => {
-    await manager.close();
+    // Drain the queue
+    await queue.stop();
   });
 
   ctx
     .command('yqrt.list', 'List all yqrt programs in the channel.')
-    .channelFields(['yqprograms'])
     .action(({ session }) => {
-      if (!session.channel?.yqprograms?.length) {
+      const state = sessionsStates.getState(session);
+      const list = state.list();
+      if (list.length === 0) {
         return 'No programs yet.';
       }
-      return session.channel.yqprograms.join('\n');
+      return list.join('\n');
     });
 
   ctx
-    .command('yqrt.add <code:text>', 'Add a yqrt program to the channel.')
-    .channelFields(['yqprograms'])
+    .command('yqrt.add <code:text>', 'Add a yqrt program to the channel.', {
+      checkUnknown: true,
+      checkArgCount: true,
+    })
     .action(async ({ session }, code) => {
+      const channelKey = getChannelKey(session);
+      const state = sessionsStates.getState(channelKey);
       try {
-        const { id, initialResponse } = await manager.create(code);
-        session.channel.yqprograms.push(id);
+        const { id, initialResponse } = await queue.process(
+          state.create(code, {
+            channelKey,
+            author: session.userId,
+            timestamp: session.timestamp,
+          }),
+        );
         return `Program added: ${id}\n${initialResponse}`;
       } catch (error) {
         return `Failed to create container: ${error.message}`;
@@ -88,17 +84,23 @@ export async function apply(ctx: Context, config: Config) {
     });
 
   ctx
-    .command('yqrt.invoke <id:string> <input:text>', 'Invoke a yqrt program.')
-    .channelFields(['yqprograms'])
+    .command('yqrt.invoke <id:string> <input:text>', 'Invoke a yqrt program.', {
+      checkUnknown: true,
+      checkArgCount: true,
+    })
     .action(async ({ session }, id, input) => {
-      if (!session.channel.yqprograms.includes(id)) {
-        return 'Program not found.';
-      }
+      const state = sessionsStates.getState(session);
       try {
-        return await manager.run(id, {
-          type: 'message',
-          data: input,
-        });
+        const { response, error } = await queue.process(
+          state.run(id, {
+            type: 'message',
+            data: input,
+          }),
+        );
+        ctx.logger.info(
+          `invoked ${id}, response: ${JSON.stringify(response)}, error: ${JSON.stringify(error)}`,
+        );
+        return response;
       } catch (error) {
         return `Failed to run container: ${error.message}`;
       }
@@ -108,20 +110,16 @@ export async function apply(ctx: Context, config: Config) {
     .command(
       'yqrt.remove <id:string>',
       'Remove a yqrt program from the channel.',
+      { checkUnknown: true, checkArgCount: true },
     )
     .option('force', '-f')
-    .channelFields(['yqprograms'])
     .action(async ({ session, options }, id) => {
-      const index = session.channel.yqprograms.indexOf(id);
-      if (index === -1) {
-        return 'Program not found.';
-      }
+      const state = sessionsStates.getState(session);
       try {
-        await manager.remove(id, options.force ?? false);
+        await queue.process(state.remove(id, options.force ?? false));
       } catch (error) {
         return `Failed to remove container: ${error.message}`;
       }
-      session.channel.yqprograms.splice(index, 1);
       return `Program removed: ${id}`;
     });
 }

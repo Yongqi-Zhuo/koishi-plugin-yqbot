@@ -1,57 +1,86 @@
-import { ContainerItem } from './schema';
+import Docker from 'dockerode';
 
-export type RuntimeEvent = {
-  type: string;
-  data: string;
-};
+import { ExecutionOptions, RuntimeEvent } from './common';
+import Container from './container';
+import { ContainerMetadata, CurrentVersion } from './schema';
 
-export type ExecutionOptions = {
-  timeout: number;
-};
-
-export const encodeEvent = (event: RuntimeEvent): Buffer => {
-  const dataBuffer = Buffer.from(event.data);
-  const len = dataBuffer.length;
-  const headerBuffer = Buffer.from(`${event.type} ${len}\n`);
-  return Buffer.concat([headerBuffer, dataBuffer]);
+export type DockerOptions = {
+  docker: Docker;
+  compileOptions: ExecutionOptions;
+  runOptions: ExecutionOptions;
 };
 
 export type TaskKind = 'create' | 'remove' | 'run';
 
-export type CreationResult = {
+export type ResultCreate = {
   id: string;
   initialResponse: string;
 };
 
-export type TaskCreate = {
-  kind: 'create';
-  source: string;
-  resolve: (result: CreationResult) => void;
-  reject: (error: Error) => void;
-};
+export type ResultRemove = {};
 
-export type TaskRemove = {
-  kind: 'remove';
-  id: string;
-  force: boolean;
-  resolve: () => void;
-  reject: (error: Error) => void;
+export type ResultRun = {
+  response: string;
+  error: string;
 };
-
-export type TaskRun = {
-  kind: 'run';
-  id: string;
-  event: RuntimeEvent;
-  resolve: (response: string) => void;
-  reject: (error: Error) => void;
-};
-
-export type Task = TaskCreate | TaskRemove | TaskRun;
 
 export class State {
-  private readonly containers: Set<string> = new Set();
-  constructor() {}
-  accumulate({ id }: ContainerItem) {
-    this.containers.add(id);
+  private readonly containers: Map<string, Container> = new Map();
+  constructor(private readonly options: DockerOptions) {}
+
+  accumulate(container: Container) {
+    this.containers.set(container.id, container);
+  }
+
+  async create(
+    source: string,
+    metadata: Omit<ContainerMetadata, 'version'>,
+  ): Promise<ResultCreate> {
+    // Ignore stderr.
+    const [container, [initialResponse]] = await Container.Create(
+      this.options.docker,
+      source,
+      { version: CurrentVersion, ...metadata },
+      this.options.compileOptions,
+    );
+    this.containers.set(container.id, container);
+    return { id: container.id, initialResponse };
+  }
+
+  async remove(id: string, force: boolean): Promise<ResultRemove> {
+    const container = this.containers.get(id);
+    if (container === undefined) {
+      throw new Error(`container ${id} not found`);
+    }
+    await container.remove(force);
+    this.containers.delete(id);
+    return {};
+  }
+
+  async run(id: string, event: RuntimeEvent): Promise<ResultRun> {
+    const container = this.containers.get(id);
+    if (container === undefined) {
+      throw new Error(`container ${id} not found`);
+    }
+    try {
+      const [response, error] = await container.run(
+        event,
+        this.options.runOptions,
+      );
+      return { response, error };
+    } catch (error) {
+      // Something bad happened.
+      // We had better remove the container.
+      await this.remove(id, true);
+      throw error;
+    }
+  }
+
+  list(): string[] {
+    return Array.from(this.containers.keys());
+  }
+
+  has(id: string): boolean {
+    return this.containers.has(id);
   }
 }

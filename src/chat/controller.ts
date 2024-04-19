@@ -91,6 +91,9 @@ export class Controller {
 }
 
 export const initializeStates = async (ctx: Context) => {
-  const storage = await createChannelwiseStorage(ctx, 'chat', State);
-  return storage.withController(Controller);
+  const storage = createChannelwiseStorage(
+    await ctx.database.select('chat').execute(),
+    State,
+  );
+  return storage.withController(ctx, Controller);
 };
