@@ -5,9 +5,9 @@
 extern "C" {
 #endif
 
-struct yqrt_message_t {
-    const char *text;
-};
+typedef struct yqrt_message_t {
+  const char *text;
+} yqrt_message_t;
 
 #ifdef __cplusplus
 }

@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-yqbot",
   "description": "yqbot, bot by yq",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "contributors": [
     "Yongqi Zhuo <yongqizhuo@gmail.com>"
   ],

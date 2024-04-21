@@ -72,7 +72,7 @@ function createChannelwiseStorageComplex<
   State,
   Medium,
 >(
-  data: Schema[],
+  data: Iterable<Schema>,
   StateConstructor: () => State,
   reducer: StateReducer<Medium, Schema>,
   prologue: () => Medium,
@@ -102,7 +102,7 @@ function createChannelwiseStorageSimple<
   Schema extends ChannelwiseSchema,
   State,
 >(
-  data: Schema[],
+  data: Iterable<Schema>,
   StateConstructor: () => State,
   reducer: StateReducer<State, Schema>,
 ): ChannelwiseStorage<State> {
@@ -130,7 +130,7 @@ export function createChannelwiseStorage<
   State,
   Medium,
 >(
-  data: Schema[],
+  data: Iterable<Schema>,
   // Pass a class name or a factory function.
   StateConstructor: (new () => State) | (() => State),
   // Reduce the data to the intermediate state. If the return value is not undefined, it will be used as the new intermediate state.
@@ -146,7 +146,7 @@ export function createChannelwiseStorage<
   Schema extends ChannelwiseSchema,
   State,
 >(
-  data: Schema[],
+  data: Iterable<Schema>,
   // Pass a class name or a factory function.
   StateConstructor: (new () => State) | (() => State),
   // Reduce the data to the state. If the return value is not undefined, it will be used as the new state. If the state is accumulative, a default reducer is provided, which is the below overload.
@@ -158,7 +158,7 @@ export function createChannelwiseStorage<
   Schema extends ChannelwiseSchema,
   State extends AccumulativeState<Schema>,
 >(
-  data: Schema[],
+  data: Iterable<Schema>,
   StateConstructor: (new () => State) | (() => State),
   reducer?: StateReducer<State, Schema>,
 ): ChannelwiseStorage<State>;
@@ -167,7 +167,7 @@ export function createChannelwiseStorage<
   Schema extends ChannelwiseSchema,
   State,
 >(
-  data: Schema[],
+  data: Iterable<Schema>,
   StateConstructor: (new () => State) | (() => State),
   reducer?: StateReducer<any, Schema>,
   prologue?: () => any,

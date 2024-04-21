@@ -9,3 +9,14 @@ export const makeTempDir = () =>
     prefix: tempDirPrefix,
     dir: os.tmpdir(),
   });
+
+export const CFamilyLanguages = ['c', 'c++'] as const;
+export const PythonLanguage = 'python' as const;
+
+export const Languages = [...CFamilyLanguages, PythonLanguage] as const;
+
+export const SourceFileExtensions = {
+  c: '.c',
+  'c++': '.cpp',
+  python: '.py',
+} as const;

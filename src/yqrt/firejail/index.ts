@@ -1,8 +1,8 @@
 import { Context, Schema, h } from 'koishi';
 import { parse } from 'shell-quote';
 
-import { makeTempDir } from '../common';
-import { Compiler, Languages } from './compile';
+import { Languages, makeTempDir } from '../common';
+import { Compiler } from './compile';
 import { sandbox } from './execute';
 
 export const name = 'yqrt-firejail';

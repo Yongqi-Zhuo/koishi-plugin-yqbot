@@ -1,4 +1,5 @@
 import Docker from 'dockerode';
+import { promisify } from 'util';
 
 import { ImageName } from './common';
 
@@ -13,9 +14,5 @@ export default async function buildImage(docker: Docker): Promise<void> {
       t: ImageName,
     },
   );
-  await new Promise((resolve, reject) => {
-    docker.modem.followProgress(stream, (err, res) =>
-      err ? reject(err) : resolve(res),
-    );
-  });
+  await promisify(docker.modem.followProgress.bind(docker.modem))(stream);
 }

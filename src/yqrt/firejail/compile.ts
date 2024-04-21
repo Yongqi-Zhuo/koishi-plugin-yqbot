@@ -1,3 +1,4 @@
+import { CFamilyLanguages, Languages, PythonLanguage } from '../common';
 import { UnprocessedExecResult, execute, sandbox } from './execute';
 
 export type CompilerOptions = {
@@ -5,11 +6,6 @@ export type CompilerOptions = {
   timeoutCompile: number;
   timeoutRun: number;
 };
-
-export const CFamilyLanguages = ['c', 'c++'] as const;
-export const PythonLanguage = 'python' as const;
-
-export const Languages = [...CFamilyLanguages, PythonLanguage] as const;
 
 export type CompileOptions = {
   language: (typeof Languages)[number];

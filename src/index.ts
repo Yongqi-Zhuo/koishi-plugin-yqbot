@@ -15,11 +15,11 @@ export interface Config {
   yqrt: Yqrt.Config;
 }
 
-export const Config: Schema<Config> = Schema.object({
-  sgl: Sgl.Config,
-  chat: Chat.Config,
-  yqrt: Yqrt.Config,
-});
+export const Config: Schema<Config> = Schema.intersect([
+  Schema.object({ sgl: Sgl.Config }).description('图片查重'),
+  Schema.object({ chat: Chat.Config }).description('自动回复'),
+  Schema.object({ yqrt: Yqrt.Config }).description('yqrt'),
+]);
 
 export function apply(ctx: Context) {
   ctx.plugin(Sgl);

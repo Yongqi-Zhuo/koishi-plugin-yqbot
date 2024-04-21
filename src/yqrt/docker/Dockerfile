@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     git \
     libssl-dev \
     pkg-config \
+    python3 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY yqrt /yqrt

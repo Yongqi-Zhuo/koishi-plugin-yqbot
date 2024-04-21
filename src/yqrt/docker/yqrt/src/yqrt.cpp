@@ -3,9 +3,9 @@
 #include "yqrt/utils.h"
 #include "yqrt/yqrt.h"
 
-extern "C" WEAK void on_message(const yqrt_message_t *message) {
-  std::cout << "Default implementation: " << message->text << std::endl;
-}
+extern "C" WEAK void on_init() {}
+
+extern "C" WEAK void on_message(const yqrt_message_t *message) {}
 
 // We intend to use docker checkpoints to suspend and resume this process.
 int main(int argc, char *argv[]) {
@@ -26,7 +26,7 @@ int main(int argc, char *argv[]) {
     std::cerr << "Received event: " << event << ", length: " << len
               << ", text: " << text << std::endl;
     if (event == "init") {
-      std::cout << "OK" << std::endl;
+      on_init();
     } else if (event == "message") {
       yqrt_message_t message = {text.c_str()};
       on_message(&message);

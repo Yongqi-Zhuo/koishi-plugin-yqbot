@@ -21,3 +21,19 @@ export const getNickname = async (session: Session, userId: string) => {
     return userId;
   }
 };
+
+export const formatDate = (date: Date) => {
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+};
+
+export const formatTimestamp = (timestamp: number) => {
+  const date = new Date(timestamp);
+  return formatDate(date);
+};

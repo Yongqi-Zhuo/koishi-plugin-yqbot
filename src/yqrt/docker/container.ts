@@ -1,12 +1,10 @@
-import Docker, {
-  ContainerCreateOptions,
-  ContainerInspectOptions,
-  ContainerStartOptions,
-} from 'dockerode';
+import Docker, { ContainerCreateOptions } from 'dockerode';
 import { Logger } from 'koishi';
 import { PassThrough } from 'stream';
 import tar from 'tar-stream';
+import { promisify } from 'util';
 
+import { SourceFileExtensions } from '../common';
 import {
   CheckpointKey,
   EscapeSequence,
@@ -40,6 +38,13 @@ declare module 'dockerode' {
   interface ContainerInspectInfo {
     SizeRw?: number;
     SizeRootFs?: number;
+  }
+  interface Container {
+    createCheckpoint(options: {
+      checkpointId: string;
+      exit?: boolean;
+    }): Promise<void>;
+    deleteCheckpoint(checkpointId: string): Promise<void>;
   }
 }
 
@@ -77,7 +82,7 @@ export default class Container {
     private readonly inner: Docker.Container,
     // This is maintained by ourselves.
     private running: boolean,
-    readonly metadata: ContainerMetadata,
+    public readonly metadata: ContainerMetadata,
   ) {}
 
   static async Connect(docker: Docker, id: string): Promise<Container> {
@@ -94,7 +99,7 @@ export default class Container {
   private assertRunning(value: boolean) {
     if (this.running !== value) {
       throw new ContainerError(
-        `Container is ${this.running ? '' : 'not'} running.`,
+        `Container is ${this.running ? 'running' : 'not running'}.`,
       );
     }
   }
@@ -107,17 +112,11 @@ export default class Container {
     return this.metadata.channelKey;
   }
 
-  // This is the source of truth.
-  async isRunning(): Promise<boolean> {
-    const info = await this.inner.inspect();
-    return info.State.Running;
-  }
-
   private async checkpoint() {
     // We should be running by this time.
     this.assertRunning(true);
     // Create a checkpoint and exit.
-    await (this.inner as any).createCheckpoint({
+    await this.inner.createCheckpoint({
       checkpointId: CheckpointKey,
       exit: true,
     });
@@ -126,7 +125,7 @@ export default class Container {
   }
 
   private async removeCheckpoint() {
-    await (this.inner as any).deleteCheckpoint(CheckpointKey);
+    await this.inner.deleteCheckpoint(CheckpointKey);
   }
 
   private async start() {
@@ -149,10 +148,11 @@ export default class Container {
       this.assertRunning(false);
     }
     await this.inner.remove({ force });
-    this.running = false;
+    // We are not running anymore.
+    this.running = undefined;
   }
 
-  // stdout and stderr.
+  // Returns stdout and stderr.
   private async emitEvent(
     event: RuntimeEvent,
     options: ExecutionOptions,
@@ -173,25 +173,17 @@ export default class Container {
 
     // Send the event
     const encoded = encodeEvent(event);
-    await new Promise<void>((resolve, reject) =>
-      streamWrite.write(encoded, (err) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve();
-        }
-      }),
-    );
+    const taskWrite = promisify(streamWrite.write.bind(streamWrite))(encoded);
 
     // Read: response + EscapeSequence
-    const response = await new Promise<[string, string]>((resolve, reject) => {
-      let buffer = '';
+    const taskRead = new Promise<[string, string]>((resolve, reject) => {
+      let bufferOut = '';
       let bufferErr = '';
       const timer = setTimeout(
         () =>
           reject(
             new ContainerError(
-              `Execution timed out.\nstdout: ${buffer}\nstderr: ${bufferErr}`,
+              `Execution timed out.\nstdout: ${bufferOut}\nstderr: ${bufferErr}`,
             ),
           ),
         options.timeout,
@@ -203,15 +195,15 @@ export default class Container {
           if (end !== chunk.length - 1) {
             return reject(
               new ContainerError(
-                'Slave should send no more than one escape sequence',
+                'Slave should send no more than one escape sequence.',
               ),
             );
           } else {
-            buffer += chunk.slice(0, end);
-            return resolve([buffer, bufferErr]);
+            bufferOut += chunk.slice(0, end);
+            return resolve([bufferOut, bufferErr]);
           }
         } else {
-          buffer += chunk;
+          bufferOut += chunk;
         }
       });
       streamReadErr.on('data', (chunk: string) => {
@@ -219,23 +211,32 @@ export default class Container {
       });
     });
 
-    return response;
+    try {
+      const [response] = await Promise.all([taskRead, taskWrite]);
+      return response;
+    } finally {
+      streamWrite.end();
+    }
   }
 
   async run(
     event: RuntimeEvent,
     options: ExecutionOptions,
   ): Promise<[string, string]> {
+    logger.debug('Container.run()');
     this.assertRunning(false);
 
     // First restore from checkpoint.
     await this.startFromCheckpoint();
+    logger.debug('Container started from checkpoint.');
 
     // Now that we are runnning, remove the checkpoint.
     await this.removeCheckpoint();
+    logger.debug('Checkpoint removed.');
 
     // Then communicate with the container.
     const response = await this.emitEvent(event, options);
+    logger.debug('Event emitted.');
 
     // We need to do some checks.
     const info = await this.inner.inspect({
@@ -246,12 +247,17 @@ export default class Container {
     if (info.SizeRw > 128 * 1024 * 1024) {
       throw new ContainerError('Container used too much disk space.');
     }
+    logger.debug('Container size checked.');
 
     await this.checkpoint();
+    logger.debug('Container checkpointed.');
+
+    logger.debug('Container.run() done.');
     return response;
   }
 
-  async upload(content: string, filename: string, path: string) {
+  private async upload(content: string, filename: string, path: string) {
+    this.assertRunning(true);
     // Archive the content.
     const archive = tar.pack();
     archive.entry({ name: filename }, content);
@@ -266,45 +272,49 @@ export default class Container {
     metadata: ContainerMetadata,
     options: ExecutionOptions,
   ): Promise<[Container, [string, string]]> {
+    logger.debug('Container.Create()');
+
     const inner = await docker.createContainer(getConfig(metadata));
     // Newly created container is guaranteed to not be running.
     const wrapped = new Container(inner, false, metadata);
+    logger.debug('Container created.');
 
     try {
       // Start the container.
       await wrapped.start();
+      logger.debug('Container started.');
 
-      // Upload the source code.
-      await wrapped.upload(source, 'yqprogram.cpp', '/app/');
+      // Upload the source code, according to the language.
+      await wrapped.upload(
+        source,
+        'yqprogram' + SourceFileExtensions[metadata.language],
+        '/app/',
+      );
+      logger.debug('Source code uploaded.');
 
       // Tell the container to stop waiting.
+      // Now the script compiles the source code and runs the program.
       const [started] = await wrapped.emitEvent(
-        { type: 'start', data: '' },
+        { type: metadata.language, data: '' },
         options,
       );
       if (started !== 'started') {
         throw new ContainerError('Script is bad.');
       }
-
-      // Now the script compiles the source code and runs the program.
+      logger.debug('Source code compiled.');
 
       // Send an init event.
       const initialResponse = await wrapped.emitEvent(
         { type: 'init', data: '' },
         options,
       );
-
-      // Check if the container is still running.
-      if (!(await wrapped.isRunning())) {
-        throw new ContainerError('Container exited prematurely.');
-      }
+      logger.debug('Init event emitted.');
 
       // Pause the container.
       await wrapped.checkpoint();
-      if (await wrapped.isRunning()) {
-        throw new ContainerError('Container failed to checkpoint.');
-      }
+      logger.debug('Container paused for next run.');
 
+      logger.debug('Container.Create() done.');
       return [wrapped, initialResponse];
     } catch (error) {
       await wrapped.remove(true);

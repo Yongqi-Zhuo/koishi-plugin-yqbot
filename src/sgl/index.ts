@@ -3,7 +3,7 @@ import TimeAgo from 'javascript-time-ago';
 import zh from 'javascript-time-ago/locale/zh';
 import { Context, Schema, Session, h, isInteger } from 'koishi';
 
-import { getNickname } from '../common';
+import { formatDate, getNickname } from '../common';
 import { TOLERANCE_BOUND } from './common';
 import { TortureData, initializeStates } from './controller';
 import { IgnoreError, Image } from './model';
@@ -21,10 +21,10 @@ export interface Config {
 export const Config: Schema<Config> = Schema.object({
   enabled: Schema.boolean().default(true).description('Global switch for sgl.'),
   tolerance: Schema.number()
+    .default(3)
     .min(0)
     .max(7)
     .step(1)
-    .default(3)
     .description(
       'Default value for the max difference of DCT hashes for two pictures to be seen as the same.',
     ),
@@ -123,17 +123,7 @@ export async function apply(ctx: Context, config: Config) {
     );
 
     const single = ({ date, nickname }: { date: Date; nickname: string }) =>
-      `在${timeAgo.format(date, 'round')}（${
-        // YYYY年MM月DD日HH时MM分SS秒
-        date.toLocaleString('zh-CN', {
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-        })
-      }）由 ${nickname}`;
+      `在${timeAgo.format(date, 'round')}（${formatDate(date)}）由 ${nickname}`;
     let tortureText: string;
     let tortureEpilogue: string;
     if (total === 1) {
