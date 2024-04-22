@@ -26,7 +26,7 @@ export class Controller {
   constructor(
     private readonly ctx: Context,
     private readonly channelKey: string,
-    private readonly state: State,
+    public readonly state: State,
   ) {}
 
   processImages(images: Image[], tolerance: number): Promise<Candidate[]> {
@@ -165,5 +165,7 @@ export const initializeStates = async (ctx: Context) => {
     ({ hashes, exempts }: Origins): State =>
       new State(new HashIndex(hashes, exempts)),
   );
-  return storage.withController(ctx, Controller);
+  return storage.withController(
+    (channelKey, state) => new Controller(ctx, channelKey, state),
+  );
 };

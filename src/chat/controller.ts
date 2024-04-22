@@ -10,7 +10,7 @@ export class Controller {
   constructor(
     private readonly ctx: Context,
     private readonly channelKey: string,
-    private readonly state: State,
+    public readonly state: State,
   ) {}
 
   async answer(question: string): Promise<string | null> {
@@ -95,5 +95,7 @@ export const initializeStates = async (ctx: Context) => {
     await ctx.database.select('chat').execute(),
     State,
   );
-  return storage.withController(ctx, Controller);
+  return storage.withController(
+    (channelKey, state) => new Controller(ctx, channelKey, state),
+  );
 };

@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 
-import { functionalizeConstructor } from '../src/utils';
+import { Semaphore, functionalizeConstructor } from '../src/utils';
 
 describe('utils', async () => {
   describe('functionalizeConstructor', () => {
@@ -78,5 +78,31 @@ describe('utils', async () => {
         .to.be.an('object')
         .that.has.property('a', 1);
     });
+  });
+
+  describe('Semaphore', () => {
+    const expectedTime = 1000;
+    const timeQuantum = 10;
+    // throughput = concurrency / timeQuantum
+    // expectedTime = numTasks / throughput = numTasks * timeQuantum / concurrency
+    const withLength = async (concurrency: number) => {
+      let critical = 0;
+      let peak = 0;
+      const semaphore = new Semaphore(concurrency);
+      const numTasks = Math.ceil((expectedTime * concurrency) / timeQuantum);
+      const tasks = Array.from({ length: numTasks }, () =>
+        semaphore.with(async () => {
+          critical += 1;
+          peak = Math.max(peak, critical);
+          const random = Math.random() * timeQuantum;
+          await new Promise((resolve) => setTimeout(resolve, random));
+          critical -= 1;
+        }),
+      );
+      await Promise.all(tasks);
+      expect(peak).to.be.at.most(concurrency);
+    };
+    it('should work as mutex', () => withLength(1));
+    it('should work as semaphore', () => withLength(10));
   });
 });

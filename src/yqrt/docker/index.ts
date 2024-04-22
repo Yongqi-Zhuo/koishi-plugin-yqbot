@@ -2,10 +2,10 @@ import Docker from 'dockerode';
 import { Context, Schema, h } from 'koishi';
 
 import { formatTimestamp, getChannelKey, getNickname } from '../../common';
+import { Queue } from '../../utils';
 import { Languages } from '../common';
-import Queue from './Queue';
+import { initializeStates } from './controller';
 import buildImage from './build';
-import { initializeStates } from './model';
 
 declare module 'dockerode' {
   interface DockerVersion {
@@ -21,6 +21,7 @@ export interface Config {
   httpHost?: string;
   httpPort?: number;
   concurrency: number;
+  maxConsecutiveErrors: number;
   timeoutCompile: number;
   timeoutRun: number;
 }
@@ -31,6 +32,11 @@ export const Config: Schema<Config> = Schema.intersect([
       .default(1)
       .min(1)
       .description('Number of concurrent tasks.'),
+    maxConsecutiveErrors: Schema.natural()
+      .default(3)
+      .description(
+        'Maximum number of consecutive errors, before we no longer invoke the program on events.',
+      ),
     timeoutCompile: Schema.number()
       .default(10000)
       .min(100)
@@ -83,12 +89,15 @@ export async function apply(ctx: Context, config: Config) {
   await buildImage(docker);
   ctx.logger.info('Built Docker image.');
 
+  const queue = new Queue(config.concurrency);
   const sessionsStates = await initializeStates(
+    ctx,
     docker,
+    queue,
     { timeout: config.timeoutCompile },
     { timeout: config.timeoutRun },
+    config.maxConsecutiveErrors,
   );
-  const queue = new Queue(config.concurrency);
   queue.start();
 
   ctx.on('dispose', async () => {
@@ -97,30 +106,27 @@ export async function apply(ctx: Context, config: Config) {
   });
 
   ctx.middleware(async (session, next) => {
-    const state = sessionsStates.getState(session);
-    const programs = state.list();
-    const tasks = programs.map(async ({ id }) => {
-      try {
-        const { response, error } = await queue.with(() =>
-          state.run(id, {
-            type: 'message',
-            data: session.content,
-          }),
-        );
-        ctx.logger.info(
-          `on message ${id}, response: ${JSON.stringify(response)}, error: ${JSON.stringify(error)}`,
-        );
-        if (response) {
-          // Do not escape, because we want rich text result.
-          await session.sendQueued(response);
-        }
-      } catch (error) {
-        await session.sendQueued(
-          h.text(`Failed to run container ${id}: ${error}`),
-        );
-      }
+    const controller = sessionsStates.getController(session);
+    // This will not throw.
+    const tasks = await controller.event({
+      type: 'message',
+      data: session.content,
     });
-    await Promise.all(tasks);
+    await Promise.all(
+      tasks.map(async (task) => {
+        if (task.kind === 'success') {
+          const { response } = task;
+          if (response) {
+            // Do not escape, because we want rich text result.
+            await session.sendQueued(response);
+          }
+        } else {
+          await session.sendQueued(
+            h.text(`Failed to run container ${task.id}: ${task.exception}`),
+          );
+        }
+      }),
+    );
     return next();
   });
 
@@ -130,9 +136,9 @@ export async function apply(ctx: Context, config: Config) {
       checkArgCount: true,
     })
     .action(({ session }, abbr) => {
-      const state = sessionsStates.getState(session);
+      const controller = sessionsStates.getController(session);
       try {
-        const id = state.find(abbr);
+        const id = controller.find(abbr);
         return h.text(id);
       } catch (error) {
         return h.text(`Failed to find container: ${error}`);
@@ -155,18 +161,16 @@ export async function apply(ctx: Context, config: Config) {
       }
 
       const channelKey = getChannelKey(session);
-      const state = sessionsStates.getState(channelKey);
+      const controller = sessionsStates.getController(channelKey);
       try {
-        const { id, initialResponse } = await queue.with(() =>
-          state.create(code, {
-            channelKey,
-            language,
-            title,
-            source: code,
-            author: session.userId,
-            timestamp: session.timestamp,
-          }),
-        );
+        const { id, initialResponse } = await controller.create(code, {
+          channelKey,
+          language,
+          title,
+          source: code,
+          author: session.userId,
+          timestamp: session.timestamp,
+        });
         return h.text(`Program added: ${id}\n${initialResponse}`);
       } catch (error) {
         return h.text(`Failed to create container: ${error}`);
@@ -183,14 +187,12 @@ export async function apply(ctx: Context, config: Config) {
       },
     )
     .action(async ({ session }, abbr, input) => {
-      const state = sessionsStates.getState(session);
+      const controller = sessionsStates.getController(session);
       try {
-        const { id, response, error } = await queue.with(() =>
-          state.run(abbr, {
-            type: 'message',
-            data: input,
-          }),
-        );
+        const { id, response, error } = await controller.invoke(abbr, {
+          type: 'message',
+          data: input,
+        });
         ctx.logger.info(
           `invoked ${id}, response: ${JSON.stringify(response)}, error: ${JSON.stringify(error)}`,
         );
@@ -209,11 +211,9 @@ export async function apply(ctx: Context, config: Config) {
     )
     .option('force', '-f')
     .action(async ({ session, options }, abbr) => {
-      const state = sessionsStates.getState(session);
+      const controller = sessionsStates.getController(session);
       try {
-        const { id } = await queue.with(() =>
-          state.remove(abbr, options.force ?? false),
-        );
+        const { id } = await controller.remove(abbr, options.force ?? false);
         return h.text(`Program removed: ${id}`);
       } catch (error) {
         return `Failed to remove container: ${error}`;
@@ -227,9 +227,9 @@ export async function apply(ctx: Context, config: Config) {
       { checkUnknown: true, checkArgCount: true },
     )
     .action(async ({ session }, abbr) => {
-      const state = sessionsStates.getState(session);
+      const controller = sessionsStates.getController(session);
       try {
-        const metadata = state.inspect(abbr);
+        const metadata = controller.inspect(abbr);
         const { id, version, language, title, source, author, timestamp } =
           metadata;
         const nickname = await getNickname(session, author);
@@ -245,18 +245,29 @@ export async function apply(ctx: Context, config: Config) {
   ctx
     .command('yqrt.list', 'List all yqrt programs in the channel.')
     .action(async ({ session }) => {
-      const state = sessionsStates.getState(session);
-      const list = state.list();
+      const controller = sessionsStates.getController(session);
+      const list = controller.list();
       if (list.length === 0) {
         return 'No programs yet.';
       }
       const desc = await Promise.all(
-        list.map(async ({ id, language, title, author, timestamp }) => {
-          if (title === '') title = '<untitled>';
-          const nickname = await getNickname(session, author);
-          const time = formatTimestamp(timestamp);
-          return `${id} (${title}): ${language}, by ${nickname}, at ${time}`;
-        }),
+        list.map(
+          async ({
+            id,
+            language,
+            title,
+            author,
+            timestamp,
+            consecutiveErrors,
+          }) => {
+            if (title === '') title = '<untitled>';
+            const nickname = await getNickname(session, author);
+            const time = formatTimestamp(timestamp);
+            const errors =
+              consecutiveErrors > 0 ? `, now ${consecutiveErrors} errors` : '';
+            return `${id} (${title}): ${language}, by ${nickname}, at ${time}${errors}`;
+          },
+        ),
       );
       return h.text(desc.join('\n'));
     });

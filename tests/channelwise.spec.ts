@@ -58,9 +58,8 @@ after(() => app.stop());
 
 describe('channelwise', async () => {
   it('should count correctly', async () => {
-    const countStorage = await createChannelwiseStorage(
-      app,
-      'test',
+    const countStorage = createChannelwiseStorage(
+      await app.database.select('test').execute(),
       () => 0,
       (state: number) => state + 1,
     );
@@ -70,8 +69,7 @@ describe('channelwise', async () => {
 
   it('should aggregate correctly', async () => {
     const aggregateStorage = await createChannelwiseStorage(
-      app,
-      'test',
+      await app.database.select('test').execute(),
       Set<string>,
       (state: Set<string>, row: TestSchema) => state.add(row.name),
     );

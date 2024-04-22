@@ -230,9 +230,8 @@ export default class Container {
     await this.startFromCheckpoint();
     logger.debug('Container started from checkpoint.');
 
-    // Now that we are runnning, remove the checkpoint.
-    await this.removeCheckpoint();
-    logger.debug('Checkpoint removed.');
+    // Do not remove the checkpoint, because we may fail.
+    // If that is the case, the checkpoint can be saved for later use.
 
     // Then communicate with the container.
     const response = await this.emitEvent(event, options);
@@ -248,6 +247,10 @@ export default class Container {
       throw new ContainerError('Container used too much disk space.');
     }
     logger.debug('Container size checked.');
+
+    // Now before we create a new checkpoint, remove the old checkpoint.
+    await this.removeCheckpoint();
+    logger.debug('Checkpoint removed.');
 
     await this.checkpoint();
     logger.debug('Container checkpointed.');

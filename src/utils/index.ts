@@ -43,3 +43,7 @@ export function functionalizeConstructor<S>(
 export type DistributiveOmit<T, K extends keyof any> = T extends any
   ? Omit<T, K>
   : never;
+
+export { default as Semaphore } from './Semaphore';
+export { default as Queue } from './Queue';
+export { default as Mutex } from './Mutex';

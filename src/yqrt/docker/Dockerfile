@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     pkg-config \
     python3 \
+    nlohmann-json3-dev \
  && rm -rf /var/lib/apt/lists/*
 
 COPY yqrt /yqrt

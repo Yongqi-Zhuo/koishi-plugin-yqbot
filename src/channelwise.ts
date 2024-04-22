@@ -1,4 +1,4 @@
-import { Context, Session, Tables } from 'koishi';
+import { Session } from 'koishi';
 
 import { getChannelKey } from './common';
 import { functionalizeConstructor } from './utils';
@@ -10,8 +10,9 @@ export type ChannelwiseSchema = {
 const getKey = (keyOrSession: string | Session): string =>
   typeof keyOrSession === 'string' ? keyOrSession : getChannelKey(keyOrSession);
 
-type ControllerConstructor<State, Controller> = new (
-  ctx: Context,
+type StateController<State> = { state: State };
+
+type ControllerConstructor<State, Controller extends StateController<State>> = (
   channelKey: string,
   state: State,
 ) => Controller;
@@ -31,12 +32,11 @@ class ChannelwiseStorage<State> {
     return this.storage.get(key)!;
   }
 
-  withController<Controller>(
-    ctx: Context,
+  // If you really need the ChannelKey, we can add it to the state.
+  withController<Controller extends StateController<State>>(
     ControllerConstructor: ControllerConstructor<State, Controller>,
   ): ChannelwiseStorageWithController<State, Controller> {
     return new ChannelwiseStorageWithController(
-      ctx,
       this.storage,
       this.StateConstructor,
       ControllerConstructor,
@@ -47,20 +47,32 @@ class ChannelwiseStorage<State> {
 // With this class, you can get the controller for each channel.
 class ChannelwiseStorageWithController<
   State,
-  Controller,
-> extends ChannelwiseStorage<State> {
+  Controller extends StateController<State>,
+> {
+  readonly storage: Map<string, Controller> = new Map();
   constructor(
-    readonly ctx: Context,
-    storage: Map<string, State>,
-    StateConstructor: () => State,
+    states: Map<string, State>,
+    readonly StateConstructor: () => State,
     readonly ControllerConstructor: ControllerConstructor<State, Controller>,
   ) {
-    super(storage, StateConstructor);
+    for (const [key, state] of states) {
+      this.storage.set(key, this.ControllerConstructor(key, state));
+    }
   }
 
   getController(keyOrSession: string | Session): Controller {
     const key = getKey(keyOrSession);
-    return new this.ControllerConstructor(this.ctx, key, this.getState(key));
+    if (!this.storage.has(key)) {
+      this.storage.set(
+        key,
+        this.ControllerConstructor(key, this.StateConstructor()),
+      );
+    }
+    return this.storage.get(key)!;
+  }
+
+  getState(keyOrSession: string | Session): State {
+    return this.getController(keyOrSession).state;
   }
 }
 

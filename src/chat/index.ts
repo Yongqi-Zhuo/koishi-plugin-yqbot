@@ -2,9 +2,8 @@ import {} from '@koishijs/assets';
 import { Context, Schema, Session, h } from 'koishi';
 import _ from 'underscore';
 
-import { getChannelKey } from '../common';
 import { kindFor } from './common';
-import { Controller, initializeStates } from './controller';
+import { initializeStates } from './controller';
 import { declareSchema } from './schema';
 
 export const name = 'chat';
