@@ -220,6 +220,12 @@ export default class Container {
     this.running = true;
   }
 
+  private async stop() {
+    this.assertRunning(true);
+    await this.inner.stop();
+    this.running = false;
+  }
+
   async remove(force: boolean = false) {
     if (!force) {
       this.assertRunning(false);
@@ -269,20 +275,36 @@ export default class Container {
     // Do not remove the checkpoint, because we may fail.
     // If that is the case, the checkpoint can be saved for later use.
 
-    // Then communicate with the container.
-    const response = await this.emitEvent<E>(event, options.timeout);
-    logger.debug('Event emitted.');
+    let response: [string, string];
+    try {
+      // Then communicate with the container.
+      response = await this.emitEvent<E>(event, options.timeout);
+      logger.debug('Event emitted.');
 
-    // We need to do some checks.
-    const info = await this.inner.inspect({
-      _query: { size: true },
-      _body: {},
-    });
-    // The container must not use up too much disk space.
-    if (info.SizeRw > 128 * 1024 * 1024) {
-      throw new ContainerError('Container used too much disk space.');
+      // We need to do some checks.
+      const info = await this.inner.inspect({
+        _query: { size: true },
+        _body: {},
+      });
+      // The container must not use up too much disk space.
+      if (info.SizeRw > 128 * 1024 * 1024) {
+        throw new ContainerError('Container used too much disk space.');
+      }
+      logger.debug('Container size checked.');
+    } catch (error) {
+      // If an error occurs, we should stop the container.
+      logger.error('Error occurred during execution. Stopping container.');
+      try {
+        await this.stop();
+        logger.error('Container stopped.');
+      } catch (stopError) {
+        logger.error(
+          'Error stopping container, throwing the original error anyway. Stop error reason:',
+          stopError,
+        );
+      }
+      throw error;
     }
-    logger.debug('Container size checked.');
 
     // Now before we create a new checkpoint, remove the old checkpoint.
     await this.removeCheckpoint();
