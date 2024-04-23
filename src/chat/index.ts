@@ -2,7 +2,7 @@ import {} from '@koishijs/assets';
 import { Context, Schema, Session, h } from 'koishi';
 import _ from 'underscore';
 
-import { kindFor } from './common';
+import { kindFor, removeImagesInFaces } from './common';
 import { initializeStates } from './controller';
 import { declareSchema } from './schema';
 
@@ -30,7 +30,8 @@ export async function apply(ctx: Context, config: Config) {
     sessionsStates.getController(session);
 
   ctx.middleware(async (session, next) => {
-    if (!_.all(session.elements, (e) => e.type === 'text')) {
+    const accepted = ['text', 'face', 'quote', 'at'];
+    if (session.elements.some((e) => !accepted.includes(e.type))) {
       // Not all elements are text.
       return next();
     }
@@ -62,16 +63,7 @@ export async function apply(ctx: Context, config: Config) {
       if (typeof answer !== 'string') {
         return h.text('这次没有 remember 成功，下次再试吧。');
       }
-      // The OneBot adapter sucks at <face /> elements, where it automatically inserts a child <image /> element. We should remove it.
-      answer = h.transform(answer, {
-        face: (attrs) => {
-          // Jump out if the platform is not OneBot.
-          if (attrs.platform !== 'onebot') return false;
-          // Now we are sure that the platform is OneBot.
-          // Do not return the children inside.
-          return h('face', attrs);
-        },
-      });
+      answer = removeImagesInFaces(answer);
       const handle = getController(session);
       const savedAnswer = await ctx.assets.transform(answer);
       const kind = kindFor(options.inexact);
