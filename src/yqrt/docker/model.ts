@@ -58,12 +58,12 @@ export class State {
     this.containers.delete(container.id);
   }
 
-  async run(
+  async run<E extends RuntimeEvent>(
     container: Container,
-    event: RuntimeEvent,
+    event: E,
     options: ExecutionOptions,
   ) {
-    const [response, error] = await container.run(event, options);
+    const [response, error] = await container.run<E>(event, options);
     return { response, error };
   }
 

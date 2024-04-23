@@ -1,9 +1,9 @@
 import Docker from 'dockerode';
-import { Context } from 'koishi';
+import { Context, Session } from 'koishi';
 
 import { createChannelwiseStorage } from '../../channelwise';
 import { Mutex, Queue } from '../../utils';
-import { ExecutionOptions, RuntimeEvent } from './common';
+import { ExecutionOptions, RuntimeEvent, RuntimeEventMessage } from './common';
 import Container, { getAllContainers } from './container';
 import { State } from './model';
 import { ContainerMetadata, KeyedContainerMetadata } from './schema';
@@ -96,18 +96,35 @@ export class Controller {
   }
 
   remove(abbr: string, force: boolean): Promise<ResultRemove> {
-    return this.queue.with(() =>
+    const task = () =>
       this.withContainer(abbr, async (container) => {
         await this.state.remove(container, force);
+        this.extras.delete(container.id);
         return { id: container.id };
-      }),
-    );
+      });
+    if (force) {
+      return task();
+    } else {
+      return this.queue.with(task);
+    }
   }
 
-  invoke(abbr: string, event: RuntimeEvent): Promise<ResultInvoke> {
+  sesssionEvent(session: Session): RuntimeEventMessage {
+    return {
+      kind: 'message',
+      author: parseInt(session.userId),
+      timestamp: session.timestamp,
+      text: session.content,
+    };
+  }
+
+  invoke<E extends RuntimeEvent>(
+    abbr: string,
+    event: E,
+  ): Promise<ResultInvoke> {
     return this.queue.with(() =>
       this.withContainer(abbr, async (container) => {
-        const { response, error } = await this.state.run(
+        const { response, error } = await this.state.run<E>(
           container,
           event,
           this.runOptions,
@@ -129,7 +146,7 @@ export class Controller {
   }
 
   // No throw.
-  event(event: RuntimeEvent): Promise<ResultEvent> {
+  event<E extends RuntimeEvent>(event: E): Promise<ResultEvent> {
     const programs = this.list();
     return Promise.all(
       programs
@@ -140,7 +157,7 @@ export class Controller {
         )
         .map(async ({ id }) => {
           try {
-            const { response, error } = await this.invoke(id, event);
+            const { response, error } = await this.invoke<E>(id, event);
             this.ctx.logger.info(
               `on message ${id}, response: ${JSON.stringify(response)}, error: ${JSON.stringify(error)}`,
             );
@@ -150,6 +167,10 @@ export class Controller {
           }
         }),
     );
+  }
+
+  getConsecutiveErrors(id: string) {
+    return this.getExtra(id).consecutiveErrors;
   }
 }
 

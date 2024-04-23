@@ -3,10 +3,6 @@
 # Start the container, but do not execute anything.
 # We must wait for the upload of the files to be completed.
 read lang
-# Drop the last two characters of the string, because they are " 0".
-lang=${lang%??}
-# Signal that we have received.
-printf 'started\a'
 
 # Compile according to language.
 case $lang in

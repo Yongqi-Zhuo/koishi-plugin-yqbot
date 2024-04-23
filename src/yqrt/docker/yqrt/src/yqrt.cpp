@@ -1,37 +1,40 @@
 #include <iostream>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 #include "yqrt/utils.h"
 #include "yqrt/yqrt.h"
 
-extern "C" WEAK void on_init() {}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(YqrtMessage, author, timestamp, text)
 
+// C interface
+extern "C" WEAK void on_init() {}
 extern "C" WEAK void on_message(const yqrt_message_t *message) {}
+
+// C++ interface
+WEAK void onInit() {}
+WEAK void onMessage(const YqrtMessage &message) {}
 
 // We intend to use docker checkpoints to suspend and resume this process.
 int main(int argc, char *argv[]) {
-  std::string event;
-  // Format: <event> <length>\n<text>
+  json event;
+  // Format: {"kind": "...", ...}
   while (std::cin >> event) {
-    // Now ignore the event.
-    std::size_t len;
-    std::cin >> len;
-    std::cin.ignore(1, '\n');
-    std::string text;
-    text.resize(len);
-    std::cin.read(&text[0], len);
-    if (!std::cin) {
-      std::cerr << "Bad input." << std::endl;
-      return 1;
-    }
-    std::cerr << "Received event: " << event << ", length: " << len
-              << ", text: " << text << std::endl;
-    if (event == "init") {
+    std::cerr << "Received event: " << event.dump() << std::endl;
+    std::string kind;
+    event.at("kind").get_to(kind);
+    if (kind == "init") {
+      onInit();
       on_init();
-    } else if (event == "message") {
-      yqrt_message_t message = {text.c_str()};
-      on_message(&message);
+    } else if (kind == "message") {
+      YqrtMessage message;
+      event.get_to(message);
+      onMessage(message);
+      yqrt_message_t c_message = message.toC();
+      on_message(&c_message);
     } else {
-      std::cerr << "Unknown event: " << event << std::endl;
+      std::cerr << "Unknown event: " << kind << std::endl;
       return 1;
     }
     // Use escape sequence to signal the end of the event.

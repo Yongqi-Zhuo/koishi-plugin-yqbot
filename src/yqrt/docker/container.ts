@@ -11,6 +11,7 @@ import {
   ExecutionOptions,
   ImageName,
   RuntimeEvent,
+  RuntimeEventInit,
   encodeEvent,
 } from './common';
 import {
@@ -74,6 +75,82 @@ export class ContainerError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ContainerError';
+  }
+}
+
+// You can issue multiple writes, but only one read.
+export class Terminal {
+  private writes: Buffer[] = [];
+  private read: Promise<[string, string]>;
+  constructor(
+    modem: typeof Docker.prototype.modem,
+    private streamWrite: NodeJS.ReadWriteStream,
+    timeout: number,
+  ) {
+    const streamReadOut = new PassThrough();
+    const streamReadErr = new PassThrough();
+    modem.demuxStream(this.streamWrite, streamReadOut, streamReadErr);
+
+    streamReadOut.setEncoding('utf8');
+    streamReadErr.setEncoding('utf8');
+
+    // Read: response + EscapeSequence
+    this.read = new Promise<[string, string]>((resolve, reject) => {
+      let bufferOut = '';
+      let bufferErr = '';
+      const timer = setTimeout(
+        () =>
+          reject(
+            new ContainerError(
+              `Execution timed out.\nstdout: ${bufferOut}\nstderr: ${bufferErr}`,
+            ),
+          ),
+        timeout,
+      );
+      streamReadOut.on('data', (chunk: string) => {
+        const end = chunk.indexOf(EscapeSequence);
+        if (end !== -1) {
+          clearTimeout(timer);
+          if (end !== chunk.length - 1) {
+            reject(
+              new ContainerError(
+                'Slave should send no more than one escape sequence.',
+              ),
+            );
+          } else {
+            bufferOut += chunk.slice(0, end);
+            resolve([bufferOut, bufferErr]);
+          }
+          return;
+        } else {
+          bufferOut += chunk;
+        }
+      });
+      streamReadErr.on('data', (chunk: string) => {
+        bufferErr += chunk;
+      });
+    });
+  }
+
+  issueWrite(buffer: Buffer) {
+    this.writes.push(buffer);
+  }
+
+  async readToEnd(): Promise<[string, string]> {
+    // Actually write.
+    // Because write callback is only invoked once.
+    const write: (buffer: Buffer) => Promise<void> = promisify(
+      this.streamWrite.write.bind(this.streamWrite),
+    );
+    try {
+      const [response] = await Promise.all([
+        this.read,
+        write(Buffer.concat(this.writes)),
+      ]);
+      return response;
+    } finally {
+      this.streamWrite.end();
+    }
   }
 }
 
@@ -152,11 +229,7 @@ export default class Container {
     this.running = undefined;
   }
 
-  // Returns stdout and stderr.
-  private async emitEvent(
-    event: RuntimeEvent,
-    options: ExecutionOptions,
-  ): Promise<[string, string]> {
+  private async attach(timeout: number): Promise<Terminal> {
     this.assertRunning(true);
     const streamWrite = await this.inner.attach({
       stream: true,
@@ -164,63 +237,26 @@ export default class Container {
       stdout: true,
       stderr: true,
     });
-    const streamReadOut = new PassThrough();
-    const streamReadErr = new PassThrough();
-    this.inner.modem.demuxStream(streamWrite, streamReadOut, streamReadErr);
-
-    streamReadOut.setEncoding('utf8');
-    streamReadErr.setEncoding('utf8');
-
-    // Send the event
-    const encoded = encodeEvent(event);
-    const taskWrite = promisify(streamWrite.write.bind(streamWrite))(encoded);
-
-    // Read: response + EscapeSequence
-    const taskRead = new Promise<[string, string]>((resolve, reject) => {
-      let bufferOut = '';
-      let bufferErr = '';
-      const timer = setTimeout(
-        () =>
-          reject(
-            new ContainerError(
-              `Execution timed out.\nstdout: ${bufferOut}\nstderr: ${bufferErr}`,
-            ),
-          ),
-        options.timeout,
-      );
-      streamReadOut.on('data', (chunk: string) => {
-        const end = chunk.indexOf(EscapeSequence);
-        if (end !== -1) {
-          clearTimeout(timer);
-          if (end !== chunk.length - 1) {
-            return reject(
-              new ContainerError(
-                'Slave should send no more than one escape sequence.',
-              ),
-            );
-          } else {
-            bufferOut += chunk.slice(0, end);
-            return resolve([bufferOut, bufferErr]);
-          }
-        } else {
-          bufferOut += chunk;
-        }
-      });
-      streamReadErr.on('data', (chunk: string) => {
-        bufferErr += chunk;
-      });
-    });
-
-    try {
-      const [response] = await Promise.all([taskRead, taskWrite]);
-      return response;
-    } finally {
-      streamWrite.end();
-    }
+    return new Terminal(this.inner.modem, streamWrite, timeout);
   }
 
-  async run(
-    event: RuntimeEvent,
+  // Returns stdout and stderr.
+  private async emitEvent<E extends RuntimeEvent>(
+    event: E,
+    timeout: number,
+  ): Promise<[string, string]> {
+    this.assertRunning(true);
+    const terminal = await this.attach(timeout);
+
+    // Send the event
+    const encoded = encodeEvent<E>(event);
+    terminal.issueWrite(encoded);
+
+    return await terminal.readToEnd();
+  }
+
+  async run<E extends RuntimeEvent>(
+    event: E,
     options: ExecutionOptions,
   ): Promise<[string, string]> {
     logger.debug('Container.run()');
@@ -234,7 +270,7 @@ export default class Container {
     // If that is the case, the checkpoint can be saved for later use.
 
     // Then communicate with the container.
-    const response = await this.emitEvent(event, options);
+    const response = await this.emitEvent<E>(event, options.timeout);
     logger.debug('Event emitted.');
 
     // We need to do some checks.
@@ -295,23 +331,21 @@ export default class Container {
       );
       logger.debug('Source code uploaded.');
 
+      // Attach to the container.
+      const terminal = await wrapped.attach(options.timeout);
+      logger.debug('Terminal attached.');
+
       // Tell the container to stop waiting.
       // Now the script compiles the source code and runs the program.
-      const [started] = await wrapped.emitEvent(
-        { type: metadata.language, data: '' },
-        options,
-      );
-      if (started !== 'started') {
-        throw new ContainerError('Script is bad.');
-      }
-      logger.debug('Source code compiled.');
+      terminal.issueWrite(Buffer.from(metadata.language + '\n'));
+      logger.debug('Language sent. Compilation should start.');
 
-      // Send an init event.
-      const initialResponse = await wrapped.emitEvent(
-        { type: 'init', data: '' },
-        options,
-      );
-      logger.debug('Init event emitted.');
+      // After compilation, we send an init event.
+      terminal.issueWrite(encodeEvent<RuntimeEventInit>({ kind: 'init' }));
+      logger.debug('Init event sent.');
+
+      const initialResponse = await terminal.readToEnd();
+      logger.debug('Source code compiled. Init event emitted.');
 
       // Pause the container.
       await wrapped.checkpoint();

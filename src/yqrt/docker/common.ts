@@ -5,17 +5,24 @@ export const CheckpointKey = 'paused';
 export const EscapeSequence = '\x07';
 
 export type RuntimeEvent = {
-  type: string;
-  data: string;
+  kind: string;
+};
+
+export type RuntimeEventInit = {
+  kind: 'init';
+};
+
+export type RuntimeEventMessage = {
+  kind: 'message';
+  author: number;
+  timestamp: number;
+  text: string;
 };
 
 export type ExecutionOptions = {
   timeout: number;
 };
 
-export const encodeEvent = (event: RuntimeEvent): Buffer => {
-  const dataBuffer = Buffer.from(event.data);
-  const len = dataBuffer.length;
-  const headerBuffer = Buffer.from(`${event.type} ${len}\n`);
-  return Buffer.concat([headerBuffer, dataBuffer]);
+export const encodeEvent = <E extends RuntimeEvent>(event: E): Buffer => {
+  return Buffer.from(JSON.stringify(event) + '\n');
 };

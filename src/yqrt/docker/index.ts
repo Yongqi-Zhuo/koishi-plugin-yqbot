@@ -108,10 +108,7 @@ export async function apply(ctx: Context, config: Config) {
   ctx.middleware(async (session, next) => {
     const controller = sessionsStates.getController(session);
     // This will not throw.
-    const tasks = await controller.event({
-      type: 'message',
-      data: session.content,
-    });
+    const tasks = await controller.event(controller.sesssionEvent(session));
     await Promise.all(
       tasks.map(async (task) => {
         if (task.kind === 'success') {
@@ -121,9 +118,15 @@ export async function apply(ctx: Context, config: Config) {
             await session.sendQueued(response);
           }
         } else {
-          await session.sendQueued(
-            h.text(`Failed to run container ${task.id}: ${task.exception}`),
-          );
+          const prompt = `Failed to run container ${task.id}: ${task.exception}`;
+
+          if (controller.getConsecutiveErrors(task.id) > 1) {
+            await session.sendQueued(h.text(prompt));
+          } else {
+            ctx.logger.error(
+              `${prompt}, error suppressed because it is the first error.`,
+            );
+          }
         }
       }),
     );
@@ -189,10 +192,9 @@ export async function apply(ctx: Context, config: Config) {
     .action(async ({ session }, abbr, input) => {
       const controller = sessionsStates.getController(session);
       try {
-        const { id, response, error } = await controller.invoke(abbr, {
-          type: 'message',
-          data: input,
-        });
+        const event = controller.sesssionEvent(session);
+        event.text = input;
+        const { id, response, error } = await controller.invoke(abbr, event);
         ctx.logger.info(
           `invoked ${id}, response: ${JSON.stringify(response)}, error: ${JSON.stringify(error)}`,
         );
